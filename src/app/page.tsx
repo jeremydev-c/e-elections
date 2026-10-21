@@ -11,7 +11,6 @@ import {
   ScanFace,
   Settings2,
   ShieldCheck,
-  UserPlus,
   Vote,
 } from "lucide-react";
 
@@ -23,7 +22,7 @@ const STEPS = [
 ];
 
 const PILLARS = [
-  { icon: Fingerprint, title: "Biometric choice", text: "128-point face matching with a head-turn liveness check, or a WebAuthn fingerprint that never leaves the device." },
+  { icon: Fingerprint, title: "Biometric choice", text: "128-point face matching with a random liveness check (turn and blink on cue), or a WebAuthn fingerprint that never leaves the device." },
   { icon: MapPin, title: "Vote from anywhere", text: "Ballots are routed to the voter's registered region, so nobody travels back to their polling centre." },
   { icon: Link2, title: "Tamper-evident ledger", text: "Each ballot carries the SHA-256 fingerprint of the one before it. Alter a record and the chain breaks." },
   { icon: EyeOff, title: "Secret ballot by design", text: "The ledger stores no name and no ID number. A receipt proves your vote counted, not how you voted." },
@@ -215,17 +214,14 @@ export default function Home() {
         <div className="glass flex flex-col gap-6 p-7 sm:flex-row sm:items-center sm:justify-between sm:p-9">
           <div>
             <p className="eyebrow">For election officials</p>
-            <h2 className="mt-2 font-display text-2xl font-semibold text-ink">Register voters and prepare the demo</h2>
+            <h2 className="mt-2 font-display text-2xl font-semibold text-ink">Officials&apos; portal</h2>
             <p className="mt-1 max-w-lg text-sm text-ink-soft">
-              Enrol citizens with ID, home region, face and fingerprint, or seed fictional candidates for all 47 counties.
+              Signed-in officials register voters and prepare the election. Voters never need this page.
             </p>
           </div>
           <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-            <Link href="/register" className="btn-ghost">
-              <UserPlus className="size-4" aria-hidden /> Voter registration
-            </Link>
             <Link href="/setup" className="btn-ghost">
-              <Settings2 className="size-4" aria-hidden /> Demo setup
+              <Settings2 className="size-4" aria-hidden /> Officials sign in
             </Link>
           </div>
         </div>

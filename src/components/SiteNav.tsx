@@ -8,8 +8,8 @@ import { Brand } from "@/components/Brand";
 const LINKS = [
   { href: "/results", label: "Live results", match: ["/results"] },
   { href: "/verify", label: "Verify receipt", match: ["/verify"] },
-  { href: "/register", label: "Registration", match: ["/register"] },
-  { href: "/setup", label: "Setup", match: ["/setup"] },
+  // Voter registration is for officials only: reached from the Officials page after signing in.
+  { href: "/setup", label: "Officials", match: ["/setup", "/register"] },
 ];
 
 export function SiteNav() {

@@ -11,6 +11,7 @@ import {
   Sprout,
   TriangleAlert,
   UserCog,
+  UserPlus,
 } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
 import { useToast } from "@/components/Toast";
@@ -106,7 +107,13 @@ export default function SetupPage() {
 
   return (
     <main className="mx-auto min-h-dvh max-w-4xl space-y-6 px-4 py-8">
-      <PageTitle eyebrow="Demo Control Panel" title="Setup & Seed Data" />
+      <PageTitle eyebrow="Officials' portal" title="Setup & Seed Data">
+        {canManage && (
+          <Link href="/register" id="go-register" className="btn-primary px-4 py-2 text-sm">
+            <UserPlus className="size-4" aria-hidden /> Register voters
+          </Link>
+        )}
+      </PageTitle>
 
       {/* Status */}
       <section className="glass space-y-4 p-6">

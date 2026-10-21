@@ -1,0 +1,103 @@
+{
+ "date": "2026-10-21T21:12:25.434Z",
+ "setup": "Laptop running the production build; database on MongoDB Atlas (free tier) over the internet",
+ "offlineOneToN": {
+  "bytesPerTemplate": 21202,
+  "rows": [
+   {
+    "enrolled": 1000,
+    "decryptAndMatchMs": 221,
+    "bytesDownloaded": 21201496
+   },
+   {
+    "enrolled": 5000,
+    "decryptAndMatchMs": 960,
+    "bytesDownloaded": 105999452
+   },
+   {
+    "enrolled": 10000,
+    "decryptAndMatchMs": 1845,
+    "bytesDownloaded": 212015095
+   }
+  ],
+  "projection": {
+   "enrolled": 22120458,
+   "cpuSecondsPerLogin": 4081.2,
+   "gigabytesPerLogin": 469
+  },
+  "currentCap": 5000
+ },
+ "live": {
+  "registerSize": 60,
+  "waves": [
+   {
+    "simultaneousVoters": 5,
+    "votesCast": 5,
+    "wallClockSeconds": 6.47,
+    "votesPerSecond": 0.77,
+    "totalMs": {
+     "p50": 4421,
+     "p95": 6473,
+     "max": 6473
+    },
+    "stepP95Ms": {
+     "lookup": 1291,
+     "liveness": 38,
+     "face": 4598,
+     "ballot": 194,
+     "cast": 1580
+    },
+    "failures": {}
+   },
+   {
+    "simultaneousVoters": 10,
+    "votesCast": 10,
+    "wallClockSeconds": 9.15,
+    "votesPerSecond": 1.09,
+    "totalMs": {
+     "p50": 6838,
+     "p95": 9154,
+     "max": 9154
+    },
+    "stepP95Ms": {
+     "lookup": 1151,
+     "liveness": 22,
+     "face": 5699,
+     "ballot": 213,
+     "cast": 3794
+    },
+    "failures": {}
+   },
+   {
+    "simultaneousVoters": 20,
+    "votesCast": 20,
+    "wallClockSeconds": 21.98,
+    "votesPerSecond": 0.91,
+    "totalMs": {
+     "p50": 17063,
+     "p95": 21975,
+     "max": 21975
+    },
+    "stepP95Ms": {
+     "lookup": 465,
+     "liveness": 30,
+     "face": 10044,
+     "ballot": 5366,
+     "cast": 13322
+    },
+    "failures": {}
+   }
+  ],
+  "results": {
+   "watchers": 30,
+   "requests": 90,
+   "errors": 0,
+   "requestsPerSecond": 16.4,
+   "ms": {
+    "p50": 1682,
+    "p95": 1849,
+    "max": 1914
+   }
+  }
+ }
+}
