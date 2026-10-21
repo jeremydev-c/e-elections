@@ -1,0 +1,73 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "e-elections-test-db",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "env": {
+        "MONGODB_DB": "e_elections_test"
+      },
+      "port": 3000
+    },
+    {
+      "name": "e-elections-prod-check",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "next",
+        "start",
+        "-p",
+        "3005"
+      ],
+      "env": {
+        "MONGODB_DB": "e_elections_test"
+      },
+      "port": 3005
+    },
+    {
+      "name": "portfolio-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "jeremy-portfolio",
+        "--",
+        "-p",
+        "3100"
+      ],
+      "port": 3100
+    },
+    {
+      "name": "modinat-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "clients/modinat-portfolio",
+        "--",
+        "-p",
+        "3200"
+      ],
+      "port": 3200
+    },
+    {
+      "name": "modinat-prod",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "--prefix",
+        "clients/modinat-portfolio",
+        "next",
+        "start",
+        "clients/modinat-portfolio",
+        "-p",
+        "3201"
+      ],
+      "port": 3201
+    }
+  ]
+}

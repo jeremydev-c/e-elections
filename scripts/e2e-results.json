@@ -1,0 +1,116 @@
+{
+  "date": "2026-10-19T18:45:12.054Z",
+  "base": "http://localhost:3005",
+  "registration": {
+    "attempted": 70,
+    "registered": 70,
+    "avgMs": 718,
+    "duplicateFaceBlocked": true,
+    "duplicateIdBlocked": true,
+    "lookalikeFlaggedAsDuplicate": true
+  },
+  "impostors": {
+    "attempts": 12,
+    "rejected": 12,
+    "falseAcceptRate": 0
+  },
+  "voting": {
+    "voters": 40,
+    "verifiedFirstTry": 40,
+    "verifiedSecondTry": 0,
+    "notVerified": 0,
+    "ballotsRoutedCorrectly": 40,
+    "votesCast": 40,
+    "avgMs": {
+      "lookup": 171,
+      "face": 804,
+      "ballot": 167,
+      "cast": 820,
+      "total": 1964
+    },
+    "maxTotalMs": 2470
+  },
+  "doubleVoting": {
+    "attempts": 30,
+    "blockedAtIdCheck": 10,
+    "blockedAtFace": 10,
+    "blockedAtCast": 10,
+    "sampleMessage": "ACCESS DENIED: National ID 31000001 has already cast a ballot at 19 Oct 2026, 21:00–22:00 EAT. Double voting is strictly prevented."
+  },
+  "simultaneousDoubleBallots": {
+    "voters": 10,
+    "ballotsSubmitted": 30,
+    "accepted": 10,
+    "rejected": 20
+  },
+  "parallel": {
+    "voters": 20,
+    "accepted": 20,
+    "wallClockMs": 14105
+  },
+  "results": {
+    "ballotsInLedger": 70,
+    "resultsReported": 70,
+    "presidentialCandidates": 4,
+    "presidentialTallyMatchesExpected": true,
+    "avgResultsMs": 323,
+    "receiptsChecked": 70,
+    "receiptsVerified": 70,
+    "newVoteVisibleInMs": 1065,
+    "chainIntact": true
+  },
+  "attacks": {
+    "crossSiteBlocked": true,
+    "noSqlInjectionBlocked": true,
+    "wrongRegionBallotRejected": true,
+    "bruteForceStatuses": [
+      401,
+      401,
+      401,
+      401,
+      401,
+      429
+    ],
+    "bruteForceLockedAfter": 5
+  },
+  "tampering": {
+    "baselineIntact": true,
+    "fullAuditMs": 173,
+    "attacks": {
+      "changeOneVote": {
+        "detected": true,
+        "problems": [
+          "HASH_MISMATCH"
+        ]
+      },
+      "changeVoteAndRehash": {
+        "detected": true,
+        "problems": [
+          "BAD_SEAL",
+          "BROKEN_LINK"
+        ]
+      },
+      "deleteNewestBallot": {
+        "detected": true,
+        "problems": [
+          "HEAD_MISMATCH",
+          "TURNOUT_MISMATCH"
+        ]
+      },
+      "resetVoterToVoteAgain": {
+        "detected": true,
+        "problems": [
+          "TURNOUT_MISMATCH"
+        ]
+      },
+      "inflateTallyCount": {
+        "detected": true,
+        "problems": [
+          "TALLY_CACHE_DRIFT"
+        ]
+      }
+    },
+    "inflatedTallyIgnoredByResults": true,
+    "intactAfterRestore": true
+  }
+}

@@ -1,0 +1,163 @@
+@import "tailwindcss";
+@source not "../../jeremy-portfolio";
+@source not "../../clients";
+@source not "../../explainer-video";
+
+/* ---------------------------------------------------------------------------
+   E-ELECTIONS design tokens: a natural Kenyan civic palette.
+   Warm ivory paper, deep forest green, clay red, ochre and charcoal ink.
+   The colours are taken from the land and the flag, not from neon screens.
+--------------------------------------------------------------------------- */
+@theme {
+  --font-sans: var(--font-public-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+
+  /* Surfaces */
+  --color-paper: #f4efe4;
+  --color-paper-2: #ebe4d4;
+  --color-surface: #fffcf6;
+  --color-line: #e0d7c5;
+  --color-line-strong: #c9bca4;
+
+  /* Ink */
+  --color-ink: #1f2219;
+  --color-ink-soft: #565b4c;
+  --color-ink-faint: #8b8d7e;
+
+  /* Forest green (primary) */
+  --color-forest: #1f5a39;
+  --color-forest-deep: #143d26;
+  --color-forest-soft: #e2ece1;
+  --color-leaf: #4c8a5c;
+
+  /* Clay red (alerts) */
+  --color-clay: #a83e2a;
+  --color-clay-deep: #84301f;
+  --color-clay-soft: #f5e2da;
+
+  /* Ochre (warnings, highlights) */
+  --color-ochre: #b98a2e;
+  --color-ochre-deep: #7a5716;
+  --color-ochre-soft: #f3e8cf;
+
+  --animate-scan: scan 2.4s ease-in-out infinite;
+  --animate-fade-up: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-pulse-ring: pulse-ring 2.2s ease-out infinite;
+
+  @keyframes scan {
+    0%, 100% { top: 0; opacity: 0.3; }
+    50% { top: calc(100% - 4px); opacity: 1; }
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulse-ring {
+    0% { box-shadow: 0 0 0 0 rgb(31 90 57 / 0.35); }
+    100% { box-shadow: 0 0 0 16px rgb(31 90 57 / 0); }
+  }
+}
+
+html {
+  color-scheme: light;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100dvh;
+  color: var(--color-ink);
+  background-color: var(--color-paper);
+  /* Faint paper grain so large areas feel like printed stock, not flat UI. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.3 0 0 0 0 0.2 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3 {
+  text-wrap: balance;
+}
+
+::selection {
+  background: var(--color-forest-soft);
+  color: var(--color-forest-deep);
+}
+
+/* ---- Reusable component utilities (Tailwind v4 @utility) ---------------- */
+@utility glass {
+  @apply rounded-2xl border border-line bg-surface shadow-[0_1px_0_rgb(255_255_255/0.8)_inset,0_1px_2px_rgb(31_34_25/0.05),0_12px_32px_-18px_rgb(31_34_25/0.25)];
+}
+@utility card {
+  @apply rounded-xl border border-line bg-surface p-5;
+}
+@utility field-label {
+  @apply mb-1.5 block text-sm font-semibold text-ink;
+}
+@utility field {
+  @apply w-full rounded-lg border border-line-strong bg-white px-4 py-3 text-base text-ink
+    placeholder:text-ink-faint outline-none transition
+    focus:border-forest focus:ring-4 focus:ring-forest/15
+    disabled:cursor-not-allowed disabled:bg-paper disabled:opacity-60;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-5 py-3 font-semibold transition
+    focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-forest/25
+    active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 disabled:active:translate-y-0;
+}
+@utility btn-primary {
+  @apply btn bg-forest text-white shadow-[0_1px_0_rgb(255_255_255/0.15)_inset,0_2px_6px_-2px_rgb(20_61_38/0.45)]
+    hover:bg-forest-deep;
+}
+@utility btn-ghost {
+  @apply btn border border-line-strong bg-surface text-ink hover:border-ink-faint hover:bg-paper;
+}
+@utility btn-danger {
+  @apply btn bg-clay text-white shadow-[0_2px_6px_-2px_rgb(132_48_31/0.45)] hover:bg-clay-deep;
+}
+@utility eyebrow {
+  @apply text-[11px] font-bold uppercase tracking-[0.18em] text-forest;
+}
+/* Kenyan flag: black, white fimbriation, red, white fimbriation, green. */
+@utility flag-bar {
+  background: linear-gradient(
+    90deg,
+    #1f2219 0 31%,
+    #fffcf6 31% 34.5%,
+    #a83e2a 34.5% 65.5%,
+    #fffcf6 65.5% 69%,
+    #1f5a39 69% 100%
+  );
+}
+
+@media print {
+  body { background: #fff; color: #000; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Woven kikoi stripe, used as a quiet textile accent between sections. */
+@utility kikoi {
+  background: repeating-linear-gradient(
+    90deg,
+    #1f5a39 0 14px,
+    #f4efe4 14px 16px,
+    #b98a2e 16px 22px,
+    #f4efe4 22px 24px,
+    #a83e2a 24px 30px,
+    #f4efe4 30px 32px,
+    #1f2219 32px 36px,
+    #f4efe4 36px 38px
+  );
+}
+/* Perforated tear-off edge for the paper receipt illustration. */
+@utility perforated {
+  background-image: radial-gradient(circle at 8px 0, transparent 6px, var(--color-surface) 6.5px);
+  background-size: 16px 12px;
+  background-repeat: repeat-x;
+}

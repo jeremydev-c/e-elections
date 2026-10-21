@@ -1,0 +1,37 @@
+{
+  "name": "e-elections",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "build:regions": "tsx scripts/build-regions.ts",
+    "seed": "tsx scripts/seed.ts",
+    "reset-admin": "tsx scripts/reset-admin.ts"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "^14.0.0",
+    "@simplewebauthn/server": "^14.0.3",
+    "@vladmandic/face-api": "^1.7.15",
+    "jose": "^6.2.12",
+    "lucide-react": "^1.59.0",
+    "mongoose": "^9.11.2",
+    "next": "16.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.2",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5"
+  }
+}
