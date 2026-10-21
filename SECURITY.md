@@ -11,6 +11,7 @@ Please **do not open a public issue** for security problems. Use GitHub's privat
 | Threat | Protection |
 |---|---|
 | Someone votes as another person | Two-step verification: National ID, then face (strict 1:1 match **and** 1:N lookalike check) or a WebAuthn fingerprint bound to the voter's own device |
+| A photo, a phone screen or a pre-recorded video held up to the camera | **Active liveness check**: the server picks a random order of moves (turn left, turn right, blink) for every face login, sealed in a 90-second, single-use token; the face is only matched if the recorded moves are real, in that order, at human speed, and done by the same face |
 | A voter votes twice | ID check before verification, a second check at face login, and an atomic database transaction at the moment of casting |
 | Ballots are changed, deleted or reordered in the database | SHA-256 hash chain from a genesis hash; anyone can verify it |
 | An attacker rewrites the whole chain consistently | Every ballot and the chain head carry an HMAC seal using `LEDGER_SECRET`, a key kept outside the database |
@@ -31,6 +32,14 @@ seal        = HMAC-SHA-256(LEDGER_SECRET, currentHash)
 ```
 
 The first ballot links to a fixed genesis hash. Verifying the ledger means recomputing every hash and seal in order: one changed character anywhere breaks every link after it. Voters can check that their own receipt is in the chain, and the results page can run a full chain audit.
+
+## Liveness (anti-spoofing)
+
+1. `POST /api/auth/voter/liveness` issues a challenge: one of 6 random orders of *turn left, turn right, blink*, inside a signed token (90-second lifetime, bound to the voter's ID, usable once).
+2. The browser guides the voter through the moves, recording head yaw and eye aspect ratio about 15 times a second, plus one face descriptor during each move.
+3. `POST /api/auth/voter/face` redeems the token and checks the evidence (`src/lib/liveness.ts`): every move present, in the issued order, starting from a frontal pose (so an angled photo fails), eyes going open → closed → open against the voter's own baseline, no move faster than a human can do it, and each move's descriptor close to the frontal reading (so one person can't do the moves while another's photo is matched).
+
+Failures count towards the same lockout as failed face matches, and are written to the audit log as `LIVENESS_FAILED`.
 
 ## Biometrics
 
@@ -54,7 +63,7 @@ Changing `LEDGER_SECRET` or `BIOMETRIC_KEY` after an election has started makes 
 This is a prototype. Before any binding election it would need:
 
 - an **independent security audit** and penetration test;
-- **liveness / anti-spoofing** checks against photos and screens held up to the camera (ISO/IEC 30107);
+- **certified liveness detection** (ISO/IEC 30107). The current check runs in the browser, so it stops photos, screens and replayed videos, but a determined attacker who rewrites the web page's code could send fabricated telemetry. Production systems verify liveness from the video itself on the server or in a certified SDK;
 - protection against a compromised voter device (malware on the phone or browser);
 - a distributed rate limiter (the current one is per server instance);
 - operational procedures: key ceremonies, backups, observers and legal approval.
@@ -62,7 +71,7 @@ This is a prototype. Before any binding election it would need:
 ## Tests
 
 ```bash
-npx tsx scripts/security-test.ts      # 21 offline checks: seals, tamper attacks, encryption, face decisions, CSRF
+npx tsx scripts/security-test.ts      # 33 offline checks: seals, tamper attacks, encryption, face decisions, liveness, CSRF
 ```
 
 `scripts/e2e-election-test.ts` runs a full simulated election against a server on an isolated test database and writes [`scripts/e2e-results.json`](scripts/e2e-results.json).

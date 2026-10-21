@@ -89,8 +89,29 @@ async function register(v: TestVoter, admin: string, face = v.face) {
   }, admin);
 }
 
+// Simulated liveness: the moves the server asked for, as browser telemetry (one reading every 70 ms).
+let clock = 0;
+const MOVES: Record<string, [number, number][]> = {
+  TURN_LEFT: [[1, 0.3], [5, 0.3], [10, 0.3], [16, 0.3], [19, 0.3]],
+  TURN_RIGHT: [[2, 0.3], [-4, 0.3], [-9, 0.3], [-15, 0.3], [-18, 0.3]],
+  BLINK: [[0, 0.31], [0, 0.3], [0, 0.11], [0, 0.1], [0, 0.29], [0, 0.31]],
+};
+const livenessEvidence = (steps: string[], face: number[]) => ({
+  steps: steps.map((step) => ({
+    step,
+    frames: MOVES[step].map(([yaw, ear]) => ({ t: (clock += 70), yaw, ear })),
+    descriptor: face.map((x) => x + rand() * 0.05),
+  })),
+});
+
 async function verifyFace(v: TestVoter, face = v.face) {
-  return call("POST", "/api/auth/voter/face", { idNumber: v.idNumber, descriptors: reading(face) });
+  const challenge = await call("POST", "/api/auth/voter/liveness", { idNumber: v.idNumber });
+  if (challenge.status !== 200) return challenge;
+  return call("POST", "/api/auth/voter/face", {
+    idNumber: v.idNumber,
+    descriptors: reading(face),
+    liveness: { token: challenge.data.token, evidence: livenessEvidence(challenge.data.steps, face) },
+  });
 }
 
 async function pickBallot(cookie: string) {

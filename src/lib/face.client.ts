@@ -166,6 +166,8 @@ export type BiometricTelemetry = {
   distanceStatus: "TOO_FAR" | "TOO_CLOSE" | "OPTIMAL";
   lightingStatus: "TOO_DARK" | "TOO_BRIGHT" | "GOOD";
   isBlinking: boolean;
+  /** Eye aspect ratio (average of both eyes): drops sharply when the eyes close. */
+  ear: number;
 };
 
 /**
@@ -200,6 +202,7 @@ export async function analyzeLiveFrame(
       distanceStatus: "TOO_FAR",
       lightingStatus: "GOOD",
       isBlinking: false,
+      ear: 0,
     };
   }
 
@@ -222,6 +225,7 @@ export async function analyzeLiveFrame(
       distanceStatus: "OPTIMAL",
       lightingStatus: "GOOD",
       isBlinking: false,
+      ear: 0,
     };
   }
 
@@ -271,6 +275,7 @@ export async function analyzeLiveFrame(
     distanceStatus,
     lightingStatus: "GOOD",
     isBlinking,
+    ear: Math.round(avgEAR * 1000) / 1000,
   };
 }
 

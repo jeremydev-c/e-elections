@@ -26,6 +26,8 @@ import {
 } from "../src/lib/faceMath";
 import { fuseDescriptors } from "../src/lib/face.client";
 import { proxy } from "../src/proxy";
+import { LIVENESS_STEPS, randomSteps, verifyLiveness, type LivenessStep, type LivenessStepEvidence } from "../src/lib/liveness";
+import { issueChallenge, redeemChallenge } from "../src/lib/livenessChallenge";
 
 let failed = 0;
 const check = (name: string, ok: boolean, extra = "") => {
@@ -154,5 +156,65 @@ const problems = (a: ReturnType<typeof verifyChain>) => a.issues.map((i) => `${i
   check("GET always allowed", status(proxy(req("GET", { origin: "https://evil.example" }))) === "next");
 }
 
-console.log(failed ? `\n${failed} FAILED` : "\nALL PASSED");
-process.exit(failed ? 1 : 0);
+// --------------------------------------------------------------- liveness
+async function livenessTests() {
+  let seed = 11;
+  const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
+  const unit = (v: number[]) => v.map((x) => x / Math.hypot(...v));
+  const person = () => unit(Array.from({ length: 128 }, rand)).map((x) => x * 0.95);
+  const frontal = (p: number[]) => Array.from({ length: 5 }, () => p.map((x) => x + rand() * 0.032));
+  const posed = (p: number[]) => p.map((x) => x + rand() * 0.05); // turned or blinking: a bit further off
+  const alice = person();
+  const bob = person();
+
+  // Telemetry for each move, one reading every 70 ms (about what the browser records).
+  let t = 1000;
+  const frames = (values: [number, number][]) => values.map(([yaw, ear]) => ({ t: (t += 70), yaw, ear }));
+  const move: Record<LivenessStep, () => [number, number][]> = {
+    TURN_LEFT: () => [[1, 0.3], [4, 0.3], [9, 0.3], [15, 0.3], [19, 0.3]],
+    TURN_RIGHT: () => [[18, 0.3], [6, 0.3], [-3, 0.3], [-11, 0.3], [-17, 0.3]],
+    BLINK: () => [[0, 0.31], [0, 0.3], [0, 0.12], [0, 0.1], [0, 0.29], [0, 0.31]],
+  };
+  const evidence = (steps: LivenessStep[], who = alice) => ({
+    steps: steps.map((step): LivenessStepEvidence => ({ step, frames: frames(move[step]()), descriptor: posed(who) })),
+  });
+  const order: LivenessStep[] = ["BLINK", "TURN_LEFT", "TURN_RIGHT"];
+  const face = frontal(alice);
+
+  check("Live person doing the moves passes", verifyLiveness(order, evidence(order), face).ok);
+  check("Moves in the wrong order rejected", !verifyLiveness(order, evidence(["TURN_LEFT", "BLINK", "TURN_RIGHT"]), face).ok);
+
+  const photo = evidence(order);
+  photo.steps[1].frames = frames([[20, 0.3], [20, 0.3], [20, 0.3], [20, 0.3], [20, 0.3]]);
+  check("Photo held at an angle (no real turn) rejected", !verifyLiveness(order, photo, face).ok);
+
+  const noBlink = evidence(order);
+  noBlink.steps[0].frames = frames([[0, 0.3], [0, 0.3], [0, 0.29], [0, 0.31], [0, 0.3], [0, 0.3]]);
+  check("Eyes that never close rejected", !verifyLiveness(order, noBlink, face).ok);
+
+  const tooFast = evidence(order);
+  tooFast.steps[1].frames = tooFast.steps[1].frames.map((f, i) => ({ ...f, t: tooFast.steps[1].frames[0].t + i * 10 }));
+  check("Moves faster than humanly possible rejected", !verifyLiveness(order, tooFast, face).ok);
+
+  const swapped = evidence(order);
+  swapped.steps[2].descriptor = posed(bob);
+  check("Someone else doing a move rejected", !verifyLiveness(order, swapped, face).ok);
+
+  check("Missing evidence rejected", !verifyLiveness(order, undefined, face).ok);
+
+  const c = await issueChallenge("27310001");
+  check("Challenge token redeems once", (await redeemChallenge(c.token, "27310001"))?.join() === c.steps.join());
+  check("Replayed challenge token rejected", (await redeemChallenge(c.token, "27310001")) === null);
+  const c2 = await issueChallenge("27310001");
+  check("Challenge for another ID rejected", (await redeemChallenge(c2.token, "27310002")) === null);
+  check("Forged token rejected", (await redeemChallenge(c2.token.slice(0, -4) + "AAAA", "27310001")) === null);
+
+  const seen = new Set<string>();
+  for (let i = 0; i < 300; i++) seen.add(randomSteps((max) => Math.floor(Math.random() * max)).join());
+  check("All 6 move orders are used", seen.size === 6 && [...seen].every((o) => o.split(",").length === LIVENESS_STEPS.length), `${seen.size} orders`);
+}
+
+livenessTests().then(() => {
+  console.log(failed ? `\n${failed} FAILED` : "\nALL PASSED");
+  process.exit(failed ? 1 : 0);
+});

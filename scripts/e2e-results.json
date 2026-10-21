@@ -1,10 +1,10 @@
 {
-  "date": "2026-10-19T18:45:12.054Z",
+  "date": "2026-10-21T20:48:45.822Z",
   "base": "http://localhost:3005",
   "registration": {
     "attempted": 70,
     "registered": 70,
-    "avgMs": 718,
+    "avgMs": 865,
     "duplicateFaceBlocked": true,
     "duplicateIdBlocked": true,
     "lookalikeFlaggedAsDuplicate": true
@@ -22,20 +22,20 @@
     "ballotsRoutedCorrectly": 40,
     "votesCast": 40,
     "avgMs": {
-      "lookup": 171,
-      "face": 804,
-      "ballot": 167,
-      "cast": 820,
-      "total": 1964
+      "lookup": 191,
+      "face": 1016,
+      "ballot": 186,
+      "cast": 908,
+      "total": 2308
     },
-    "maxTotalMs": 2470
+    "maxTotalMs": 4975
   },
   "doubleVoting": {
     "attempts": 30,
     "blockedAtIdCheck": 10,
     "blockedAtFace": 10,
     "blockedAtCast": 10,
-    "sampleMessage": "ACCESS DENIED: National ID 31000001 has already cast a ballot at 19 Oct 2026, 21:00–22:00 EAT. Double voting is strictly prevented."
+    "sampleMessage": "ACCESS DENIED: National ID 31000001 has already cast a ballot at 21 Oct 2026, 23:00–00:00 EAT. Double voting is strictly prevented."
   },
   "simultaneousDoubleBallots": {
     "voters": 10,
@@ -46,17 +46,17 @@
   "parallel": {
     "voters": 20,
     "accepted": 20,
-    "wallClockMs": 14105
+    "wallClockMs": 13731
   },
   "results": {
     "ballotsInLedger": 70,
     "resultsReported": 70,
     "presidentialCandidates": 4,
     "presidentialTallyMatchesExpected": true,
-    "avgResultsMs": 323,
+    "avgResultsMs": 231,
     "receiptsChecked": 70,
     "receiptsVerified": 70,
-    "newVoteVisibleInMs": 1065,
+    "newVoteVisibleInMs": 1147,
     "chainIntact": true
   },
   "attacks": {
@@ -75,7 +75,7 @@
   },
   "tampering": {
     "baselineIntact": true,
-    "fullAuditMs": 173,
+    "fullAuditMs": 186,
     "attacks": {
       "changeOneVote": {
         "detected": true,

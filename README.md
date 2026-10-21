@@ -19,7 +19,7 @@ E-ELECTIONS shows how voting could be **cheaper, faster, accessible from anywher
 ## How it works
 
 1. **Identify.** The voter enters their National ID. Anyone who has already voted is stopped here.
-2. **Verify.** Face recognition (five quality-checked camera frames, compared on 128-point face descriptors) **or** the device's fingerprint sensor through WebAuthn. The fingerprint never leaves the phone.
+2. **Verify.** Face recognition (a random liveness challenge, then five quality-checked camera frames compared on 128-point face descriptors) **or** the device's fingerprint sensor through WebAuthn. The fingerprint never leaves the phone.
 3. **Vote from anywhere.** The voter automatically gets the ballot for their own county, constituency and ward, plus the presidential race: six seats, as in a Kenyan general election.
 4. **Sealed receipt.** The ballot is stored with no name or ID, chained to the previous ballot by SHA-256 and sealed with an HMAC. The voter gets an anonymous receipt code to check later.
 5. **Live results.** Results are recomputed from the verified ledger and refresh every 3 seconds, by county, constituency and ward.
@@ -38,6 +38,7 @@ Feature phones are supported too: a `*2027#` **USSD** gateway (Africa's Talking 
 - **One voter, one ballot:** the check-and-cast happens in a single atomic database transaction, so simultaneous attempts cannot slip a second ballot through.
 - **Biometrics encrypted at rest:** face templates use AES-256-GCM, bound to the voter's ID, so encrypted faces cannot be swapped between records (Kenya Data Protection Act 2019 treats biometrics as sensitive data).
 - **Strict face matching:** a distance threshold of 0.45 (stricter than the usual 0.6), consistency checks across frames, and a one-to-many check so lookalikes are rejected.
+- **Liveness check:** every face login gets a random order of moves (turn left, turn right, blink) in a single-use token, so photos, screens and pre-recorded videos are rejected.
 - **Ballot secrecy:** the ledger holds no names or IDs, and the time a person voted is stored only to the hour.
 - **Web hardening:** CSRF protection, a Content-Security-Policy, rate limiting with lockouts against brute force, and a security audit log.
 
@@ -47,7 +48,7 @@ Full details: [SECURITY.md](SECURITY.md).
 
 | Test | Result |
 |---|---|
-| Automated security suite (`scripts/security-test.ts`) | **21 / 21 passed** |
+| Automated security suite (`scripts/security-test.ts`) | **33 / 33 passed** |
 | Simulated election: voters registered | 70 / 70 |
 | Impostor face attempts rejected | 12 / 12 (0% false accepts) |
 | Double-voting attempts blocked | 30 / 30 |

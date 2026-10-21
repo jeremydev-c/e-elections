@@ -19,7 +19,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
-import { FaceCapture, type FaceCaptureResult } from "@/components/FaceCapture";
+import { FaceCapture, type FaceCaptureResult, type LivenessChallenge } from "@/components/FaceCapture";
 import { useToast } from "@/components/Toast";
 import { preloadFaceApi } from "@/lib/face.client";
 
@@ -116,7 +116,14 @@ export default function VoterLoginPage() {
   }
 
   // ---- Stage 2A: Face Recognition Unlock -----------------------------------
-  async function handleFace({ samples }: FaceCaptureResult) {
+  async function getLivenessChallenge(): Promise<LivenessChallenge> {
+    if (!voter) throw new Error("Enter your National ID first.");
+    const { ok, data } = await postJSON<LivenessChallenge>("/api/auth/voter/liveness", { idNumber: voter.idNumber });
+    if (!ok) throw new Error(data.error ?? "Could not start the liveness check.");
+    return data;
+  }
+
+  async function handleFace({ samples, liveness }: FaceCaptureResult) {
     if (!voter) return;
     setBusy(true);
     setError("");
@@ -124,6 +131,7 @@ export default function VoterLoginPage() {
       const { ok, data } = await postJSON<{ confidence?: number; hasVoted?: boolean }>("/api/auth/voter/face", {
         idNumber: voter.idNumber,
         descriptors: samples,
+        liveness,
       });
       if (!ok) return onAuthError(data.error ?? "Face verification failed.", data.hasVoted);
       onVerified(`Face matched (${data.confidence ?? 0}% confidence).`);
@@ -331,7 +339,7 @@ export default function VoterLoginPage() {
 
                 {method === "face" && (
                   <div className="space-y-3 animate-fade-up">
-                    <FaceCapture onCapture={handleFace} actionLabel="Verify Face" requireLiveness />
+                    <FaceCapture onCapture={handleFace} actionLabel="Verify Face" requireLiveness livenessChallenge={getLivenessChallenge} />
                     {busy && (
                       <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">
                         <Loader2 className="size-4 animate-spin text-forest" /> Comparing with the voter register…

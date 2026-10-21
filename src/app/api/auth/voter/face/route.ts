@@ -10,6 +10,8 @@ import {
 } from "@/lib/faceMath";
 import { decryptFaceTemplate, enrolledTemplates } from "@/lib/biometricVault";
 import { audit } from "@/lib/audit";
+import { verifyLiveness } from "@/lib/liveness";
+import { redeemChallenge } from "@/lib/livenessChallenge";
 import { alreadyVotedMessage } from "@/lib/positions";
 import { clearFailures, clientIp, lockedFor, recordFailure } from "@/lib/rateLimit";
 import { ballotSessionResponse } from "@/lib/voterSession";
@@ -17,10 +19,12 @@ import { Voter } from "@/models/Voter";
 import { Election, electionStatus } from "@/models/Election";
 
 /**
- * POST /api/auth/voter/face { idNumber, descriptors: number[3..8][128] }
+ * POST /api/auth/voter/face { idNumber, descriptors: number[3..8][128], liveness: { token, evidence } }
  * Stage 2A: matches a multi-frame live face reading against the enrolled voter.
  *
  * Accepted only if ALL of these hold:
+ *   0. the liveness challenge (from /api/auth/voter/liveness) is genuine, unused,
+ *      issued for this ID, and the evidence shows its moves done by this face,
  *   1. every live frame is the same face (spread < 0.55),
  *   2. the median distance to the enrolled template is < 0.45,
  *   3. no other registered voter matches as well or better (1:N check),
@@ -73,11 +77,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const fail = async (error: string, reason: string) => {
+  const fail = async (error: string, reason: string, event: "FACE_MATCH_FAILED" | "LIVENESS_FAILED" = "FACE_MATCH_FAILED") => {
     recordFailure(key, 5);
     recordFailure(ipKey, 20, 10 * 60_000);
     const locked = lockedFor(key) > 0;
-    await audit(locked ? "FACE_LOCKED_OUT" : "FACE_MATCH_FAILED", {
+    await audit(locked ? "FACE_LOCKED_OUT" : event, {
       req,
       severity: locked ? "critical" : "warning",
       idNumber,
@@ -85,6 +89,24 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ error }, { status: 401 });
   };
+
+  // 0. Proof of a live person: the random moves of this login's challenge, done by this face.
+  const steps = await redeemChallenge(b.liveness?.token, idNumber);
+  if (!steps) {
+    return fail(
+      "The liveness check expired or was already used. Start the face scan again.",
+      "Liveness token missing, expired, reused or for another ID",
+      "LIVENESS_FAILED"
+    );
+  }
+  const live = verifyLiveness(steps, b.liveness?.evidence, probes);
+  if (!live.ok) {
+    return fail(
+      "We could not confirm a live person. Follow the on-screen moves (turn, blink) and retry.",
+      live.reason,
+      "LIVENESS_FAILED"
+    );
+  }
 
   // 1. All live frames must be one and the same face.
   if (probeSpread(probes) > PROBE_CONSISTENCY_LIMIT) {

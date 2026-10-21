@@ -17,6 +17,7 @@ import {
   analyzeLiveFrame,
   cameraSupportError,
   collectFaceSamples,
+  computeDescriptorFromVideo,
   cropFaceSnapshot,
   fuseDescriptors,
   loadFaceApi,
@@ -24,6 +25,15 @@ import {
   QUALITY_HINTS,
   type BiometricTelemetry,
 } from "@/lib/face.client";
+import {
+  LIVENESS,
+  STEP_PROMPTS,
+  stepSatisfied,
+  type LivenessEvidence,
+  type LivenessFrame,
+  type LivenessStep,
+  type LivenessStepEvidence,
+} from "@/lib/liveness";
 
 /** How many quality-checked frames make up one face reading. */
 const SAMPLE_COUNT = 5;
@@ -35,12 +45,17 @@ export type FaceCaptureResult = {
   /** The individual readings that survived outlier rejection. */
   samples: number[][];
   photoDataUrl?: string;
+  /** Present when a server liveness challenge was completed: send it with the face reading. */
+  liveness?: { token: string; evidence: LivenessEvidence };
 };
+
+export type LivenessChallenge = { token: string; steps: LivenessStep[] };
 
 
 type GuidedStage =
   | "CENTER" // Look straight and align in circle
-  | "TURN_LEFT" // Anti-spoofing challenge: turn head slightly left
+  | "TURN_LEFT" // Anti-spoofing challenge: turn head slightly left (no server challenge)
+  | "CHALLENGE" // Server-issued random moves: turn left, turn right, blink
   | "FINALIZE"; // Return to center to finalize descriptor fusion
 
 type Status =
@@ -55,11 +70,14 @@ export function FaceCapture({
   onCapture,
   actionLabel = "Enroll Biometrics",
   requireLiveness = false,
+  livenessChallenge,
 }: {
   onCapture: (result: FaceCaptureResult) => void;
   actionLabel?: string;
   /** Hide the single-frame quick scan so the head-turn liveness check is mandatory. */
   requireLiveness?: boolean;
+  /** Fetches a server liveness challenge (random moves). When given, the scan performs it and returns the evidence. */
+  livenessChallenge?: () => Promise<LivenessChallenge>;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -81,6 +99,16 @@ export function FaceCapture({
   const completingRef = useRef(false);
   const stageRef = useRef<GuidedStage>("CENTER");
   const faceApiRef = useRef<typeof import("@vladmandic/face-api") | null>(null);
+  // Server liveness challenge in progress: its moves, the current one, and the evidence so far.
+  const challengeRef = useRef<{
+    token: string;
+    steps: LivenessStep[];
+    index: number;
+    frames: LivenessFrame[];
+    evidence: LivenessStepEvidence[];
+    reading: boolean;
+  } | null>(null);
+  const [challengeStep, setChallengeStep] = useState<{ step: LivenessStep; index: number; total: number } | null>(null);
 
   const stopCamera = useCallback(() => {
     runningRef.current = false;
@@ -196,7 +224,7 @@ export function FaceCapture({
             if (data && runningRef.current) {
               telemetryRef.current = data;
               setTelemetry(data);
-              if (isCapturingRef.current) handleGuidedProgression(data, video, api);
+              if (isCapturingRef.current) handleGuidedProgression(data, video, api, now);
             }
           } catch {
             // Ignore single-frame inference glitches
@@ -374,7 +402,23 @@ export function FaceCapture({
       ctx.restore();
     }
 
-    // 4. Guided Arrow Animation (when asked to turn head for liveness)
+    // 4. Guided prompts for the liveness moves
+    const challenge = challengeRef.current;
+    if (isCapturing && currentStage === "CHALLENGE" && challenge) {
+      const step = challenge.steps[challenge.index];
+      const text =
+        step === "TURN_LEFT"
+          ? "◂◂ TURN YOUR HEAD TO YOUR LEFT ◂◂"
+          : step === "TURN_RIGHT"
+            ? "▸▸ TURN YOUR HEAD TO YOUR RIGHT ▸▸"
+            : "◉ CLOSE YOUR EYES, THEN OPEN ◉";
+      ctx.save();
+      ctx.fillStyle = "rgba(143, 209, 158, 0.95)";
+      ctx.font = "bold 15px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(text, cx, cy - ovalH / 2 - 28);
+      ctx.restore();
+    }
     if (isCapturing && currentStage === "TURN_LEFT") {
       ctx.save();
       ctx.fillStyle = "rgba(143, 209, 158, 0.95)";
@@ -390,7 +434,9 @@ export function FaceCapture({
   function handleGuidedProgression(
     data: BiometricTelemetry,
     video: HTMLVideoElement,
-    api: typeof import("@vladmandic/face-api")
+    api: typeof import("@vladmandic/face-api"),
+    /** Animation-frame timestamp of this reading (ms). */
+    now: number
   ) {
     if (completingRef.current) return;
     if (!data.faceFound || data.multipleFaces) {
@@ -414,7 +460,48 @@ export function FaceCapture({
       const next = progressRef.current + 0.3;
       if (next < 1) return setProgress(next);
       playBiometricSound("step");
-      goToStage("TURN_LEFT", "Anti-Spoofing: Turn head slightly to your LEFT");
+      const challenge = challengeRef.current;
+      if (challenge) {
+        challenge.frames = [];
+        goToStage("CHALLENGE", `Liveness 1/${challenge.steps.length}: ${STEP_PROMPTS[challenge.steps[0]]}`);
+        setChallengeStep({ step: challenge.steps[0], index: 0, total: challenge.steps.length });
+      } else {
+        goToStage("TURN_LEFT", "Anti-Spoofing: Turn head slightly to your LEFT");
+      }
+    }
+
+    // --- STAGE 2 (server challenge): the random moves, recorded as evidence ---
+    else if (stage === "CHALLENGE") {
+      const challenge = challengeRef.current;
+      if (!challenge || challenge.reading) return;
+      const step = challenge.steps[challenge.index];
+      challenge.frames.push({ t: Math.round(now * 10) / 10, yaw: data.yaw, ear: data.ear });
+      if (challenge.frames.length > LIVENESS.MAX_FRAMES_PER_STEP - 10) challenge.frames.shift();
+      if (!stepSatisfied(step, challenge.frames)) return;
+
+      // Move detected: take one face reading right now, so the server can check it was this face.
+      challenge.reading = true;
+      computeDescriptorFromVideo(video, api, false)
+        .then((descriptor) => {
+          challenge.reading = false;
+          if (!descriptor || challengeRef.current !== challenge) return;
+          challenge.evidence.push({ step, frames: challenge.frames, descriptor: Array.from(descriptor) });
+          challenge.frames = [];
+          challenge.index += 1;
+          playBiometricSound("step");
+          if (challenge.index < challenge.steps.length) {
+            const nextStep = challenge.steps[challenge.index];
+            setChallengeStep({ step: nextStep, index: challenge.index, total: challenge.steps.length });
+            setProgress(challenge.index / challenge.steps.length);
+            setHudMessage(`Liveness ${challenge.index + 1}/${challenge.steps.length}: ${STEP_PROMPTS[nextStep]}`);
+          } else {
+            setChallengeStep(null);
+            goToStage("FINALIZE", "Live person confirmed ✓ Now face FULLY FRONT");
+          }
+        })
+        .catch(() => {
+          challenge.reading = false;
+        });
     }
 
     // --- STAGE 2: LIVENESS HEAD ROTATION CHALLENGE (Anti-Spoofing) ---
@@ -468,6 +555,11 @@ export function FaceCapture({
   }
 
   function finish(result: FaceCaptureResult) {
+    const challenge = challengeRef.current;
+    if (challenge && challenge.evidence.length === challenge.steps.length) {
+      result = { ...result, liveness: { token: challenge.token, evidence: { steps: challenge.evidence } } };
+    }
+    challengeRef.current = null;
     playBiometricSound("success");
     stopCamera();
     setStatus({ kind: "done", photoUrl: result.photoDataUrl ?? "", frames: result.samples.length });
@@ -489,8 +581,21 @@ export function FaceCapture({
   }
 
   // Manual trigger for "Start Guided Scan"
-  function startGuidedScan() {
+  async function startGuidedScan() {
     completingRef.current = false;
+    challengeRef.current = null;
+    setChallengeStep(null);
+    if (livenessChallenge) {
+      setHudMessage("Preparing your liveness check…");
+      try {
+        const c = await livenessChallenge();
+        challengeRef.current = { token: c.token, steps: c.steps, index: 0, frames: [], evidence: [], reading: false };
+      } catch (err) {
+        setHudMessage((err as Error).message || "Could not start the liveness check. Try again.");
+        playBiometricSound("error");
+        return;
+      }
+    }
     isCapturingRef.current = true;
     setIsCapturing(true);
     goToStage("CENTER", "Align face in center frame (facing fully front)");
@@ -667,7 +772,13 @@ export function FaceCapture({
             {isCapturing && (
               <div className="mt-3 flex items-center gap-2">
                 <span className="text-[10px] font-mono text-[#9fd8ad] uppercase">
-                  {guidedStage === "CENTER" ? "1. Frontal" : guidedStage === "TURN_LEFT" ? "2. Liveness" : "3. Lock"}
+                  {guidedStage === "CENTER"
+                    ? "1. Frontal"
+                    : guidedStage === "TURN_LEFT"
+                      ? "2. Liveness"
+                      : guidedStage === "CHALLENGE"
+                        ? `2. Liveness ${(challengeStep?.index ?? 0) + 1}/${challengeStep?.total ?? 3}`
+                        : "3. Lock"}
                 </span>
                 <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
                   <div
@@ -676,7 +787,7 @@ export function FaceCapture({
                       width: `${
                         guidedStage === "CENTER"
                           ? stageProgress * 33
-                          : guidedStage === "TURN_LEFT"
+                          : guidedStage === "TURN_LEFT" || guidedStage === "CHALLENGE"
                             ? 33 + stageProgress * 33
                             : 66 + stageProgress * 34
                       }%`,
@@ -756,8 +867,9 @@ export function FaceCapture({
             <ShieldAlert className="size-3.5 text-forest" /> KSEF / YSK 2027 Biometric Anti-Spoofing Protocol
           </p>
           <p className="mt-1 leading-relaxed">
-            The guided scan verifies 3D head movement (yaw deviation) across multiple frames to reject static photos,
-            smartphone screens, and paper cutouts.
+            {livenessChallenge
+              ? "The server picks a random order of moves (turn left, turn right, blink) for every login. A photo, a screen or a pre-recorded video cannot follow it."
+              : "The guided scan verifies 3D head movement (yaw deviation) across multiple frames to reject static photos, smartphone screens, and paper cutouts."}
           </p>
         </div>
       )}
