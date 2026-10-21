@@ -101,6 +101,10 @@ E-ELECTIONS is a **prototype for research and demonstration**, built for KSEF 20
 
 Ideas, issues and pull requests are welcome. If you find a security weakness, please read [SECURITY.md](SECURITY.md) and report it privately first.
 
+## License
+
+[GNU AGPL-3.0](LICENSE). You may use, study and modify E-ELECTIONS, but if you run a modified version as a service you must publish your source code too. Election software should stay open.
+
 ## Author
 
 **Jeremy Gachiki Nduati**: self-taught developer from Kenya.
