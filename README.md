@@ -48,10 +48,11 @@ Full details: [SECURITY.md](SECURITY.md).
 
 | Test | Result |
 |---|---|
-| Automated security suite (`scripts/security-test.ts`) | **30 / 30 passed** |
+| Automated security suite (`scripts/security-test.ts`) | **34 / 34 passed** |
 | Face engine on real photos (`scripts/face-engine-test.ts`) | **13 / 13 passed** |
-| Face verification accuracy, LFW 6,000 pairs (`scripts/benchmark-lfw.ts`) | **99.85%** (± 0.17); 0 / 3,000 false accepts at the app's threshold |
-| Server time for one face scan (6 frames, laptop) | ≈ 0.6 s |
+| Face verification accuracy, LFW 6,000 pairs (`scripts/benchmark-lfw.ts`) | **99.85%** (± 0.17); 0 / 3,000 false accepts and 99.07% true accepts at the app's threshold |
+| Server time for one face scan (6 frames, laptop) | ≈ 0.8 s |
+| 1:N face search, 1 million voters (all CPU cores, 8-bit index) | ≈ 0.2 s, 0.5 GB |
 | Simulated election: voters registered | 70 / 70 |
 | Double-voting attempts blocked | 30 / 30 |
 | Simultaneous duplicate ballots | 10 accepted of 30 submitted (1 per voter) |

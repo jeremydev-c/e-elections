@@ -1,10 +1,10 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import { FACE_MATCH_MIN, RIVAL_MARGIN, templateSimilarity } from "@/lib/faceMath";
-import { decryptFaceTemplate } from "@/lib/biometricVault";
+import { FACE_MATCH_MIN, LEARN_MIN, RIVAL_MARGIN, learnFrame, templateSimilarity } from "@/lib/faceMath";
+import { decryptFaceTemplate, encryptFaceTemplate, type FaceTemplateData } from "@/lib/biometricVault";
 import { FACE_SIMILARITY_MIN, redeemLiveFace, searchFace } from "@/lib/awsFace";
 import { faceModelsInstalled } from "@/lib/faceEngine";
-import { closestTemplates, isCurrentTemplate } from "@/lib/faceIndex";
+import { closestTemplates, faceIndex, isCurrentTemplate } from "@/lib/faceIndex";
 import { SCAN_MESSAGES, analyseScan, type ScanProblem } from "@/lib/faceScan";
 import { audit } from "@/lib/audit";
 import { redeemChallenge } from "@/lib/livenessChallenge";
@@ -58,15 +58,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Face recognition is not set up on this server. Use Fingerprint." }, { status: 503 });
   }
 
+  const t0 = performance.now();
+  const lap = () => Math.round(performance.now() - t0);
   await connectDB();
 
-  const election = await Election.findById("current").lean();
+  // The database (far away on Atlas) and the face engine (local) work at the same time:
+  // read the voter and warm the face index while the frames are being checked.
+  const records = Promise.all([
+    Election.findById("current").lean(),
+    Voter.findOne({ idNumber }).select("+faceTemplate").lean(),
+  ]);
+  void faceIndex().catch(() => {});
+  const stepsP = redeemChallenge(b.liveness?.token, idNumber);
+  const scanP = stepsP.then((steps) => (steps ? analyseScan(b.frames, steps) : null));
+  scanP.catch(() => {}); // awaited below; don't report it as unhandled if we return early
+
+  const [election, voter] = await records;
+  const dbMs = lap();
   if (election && electionStatus(election) !== "OPEN") {
     return NextResponse.json({ error: "Voting window is not open." }, { status: 403 });
   }
-
-  const voter = await Voter.findOne({ idNumber }).select("+faceTemplate").lean();
-  if (!voter) return NextResponse.json({ error: "Voter not found." }, { status: 404 });
+  if (!voter) {
+    recordFailure(ipKey, 20, 10 * 60_000);
+    return NextResponse.json({ error: "Voter not found." }, { status: 404 });
+  }
   if (voter.hasVoted) {
     await audit("DOUBLE_VOTE_BLOCKED", { req, severity: "warning", idNumber, detail: "Blocked at face verification" });
     return NextResponse.json({ error: alreadyVotedMessage(voter.idNumber, voter.votedAt), hasVoted: true }, { status: 403 });
@@ -96,15 +111,15 @@ export async function POST(req: NextRequest) {
   };
 
   // 0. The challenge, and the frames that prove its moves.
-  const steps = await redeemChallenge(b.liveness?.token, idNumber);
-  if (!steps) {
+  if (!(await stepsP)) {
     return fail(
       "The liveness check expired or was already used. Start the face scan again.",
       "Liveness token missing, expired, reused or for another ID",
       "LIVENESS_FAILED"
     );
   }
-  const scan = await analyseScan(b.frames, steps);
+  const scan = (await scanP)!;
+  const scanMs = lap();
   if (!scan.ok) {
     if (QUALITY.includes(scan.problem)) {
       recordFailure(ipKey, 20, 10 * 60_000);
@@ -123,7 +138,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 2. 1:N: nobody else on the register may come close (the in-memory index finds the nearest few).
-  const others = await closestTemplates(scan.embedding, String(voter._id));
+  const others = await closestTemplates(scan.embedding, { excludeId: String(voter._id) });
   const rivalAt = Math.max(score - RIVAL_MARGIN, FACE_MATCH_MIN - 0.1);
   if (others.some((o) => isCurrentTemplate(o) && templateSimilarity(o, scan.embedding) >= rivalAt)) {
     return fail(
@@ -133,11 +148,25 @@ export async function POST(req: NextRequest) {
   }
 
   clearFailures(key);
+  // 3. After the reply: a confident match teaches the template this face in today's light.
+  if (score >= LEARN_MIN) after(() => learn(voter._id, voter.idNumber, voter.faceTemplate!, template, scan.embedding));
+  const timings = { databaseMs: dbMs, faceEngineMs: scan.stats.ms, scanReadyMs: scanMs, totalMs: lap() };
+  if (process.env.NODE_ENV !== "production") console.info("face login", { score: Math.round(score * 1000) / 1000, ...scan.stats, ...timings });
   return ballotSessionResponse(voter, {
     method: "face",
     confidence: Math.round(score * 1000) / 10,
-    scanMs: scan.stats.ms,
+    timings,
   });
+}
+
+/** Saves the learned frame, unless the template changed meanwhile (then this one is skipped). */
+async function learn(voterId: unknown, idNumber: string, oldBlob: string, template: FaceTemplateData, probe: number[]) {
+  try {
+    const updated = learnFrame(template, probe);
+    await Voter.updateOne({ _id: voterId, faceTemplate: oldBlob }, { $set: { faceTemplate: encryptFaceTemplate(updated, idNumber) } });
+  } catch (err) {
+    console.error("Learning the face template failed:", (err as Error).message);
+  }
 }
 
 /**

@@ -40,8 +40,11 @@ export const SCAN = {
   MIN_FACE_PX: 90,
   /** Frontal frames: nose within this fraction of half the eye distance from centre. */
   FRONT_YAW: 0.35,
-  /** Turn frames: the nose must have moved at least this far toward the requested side. */
-  TURN_YAW: 0.45,
+  /**
+   * Turn frames: the nose must have moved at least this far toward the requested side.
+   * (The browser aims for 0.55 and sends the peak of the turn; frontal frames stay under 0.2.)
+   */
+  TURN_YAW: 0.35,
   /** Blink frame: eye opening below this fraction of the voter's open-eye frames. */
   BLINK_RATIO: 0.6,
   /** Variance of the Laplacian of the aligned face; below = blurred by motion or focus. */
@@ -174,7 +177,12 @@ export async function analyseScan(frames: unknown, steps: LivenessStep[]): Promi
   const moves = analysed.filter((a) => a.role !== "FRONT");
 
   // One person throughout: the frontal frames must agree with each other...
-  const vecs = await embedAligned(analysed.map((a) => a.aligned));
+  // Flip averaging (fewer false rejections on LFW) only where identity is decided: the frontal
+  // frames. The move frames are only compared with them, so one reading each is enough.
+  const vecs = [
+    ...(await embedAligned(fronts.map((a) => a.aligned), true)),
+    ...(await embedAligned(moves.map((a) => a.aligned), false)),
+  ];
   const frontVecs = vecs.slice(0, fronts.length);
   const mean = meanEmbedding(frontVecs);
   let sameScanMin = 1;

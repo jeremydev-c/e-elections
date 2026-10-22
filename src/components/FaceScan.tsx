@@ -28,10 +28,11 @@ type Props = {
 
 // Same measure as the server (lib/faceEngine.ts yawOf), with a safety margin each way.
 const FRONT_YAW = 0.2; // server accepts up to 0.35
-const TURN_YAW = 0.55; // server needs 0.45
+const TURN_YAW = 0.55; // server needs 0.35
 const BLINK_SCORE = 0.6; // MediaPipe eyeBlink blendshape (0 open .. 1 shut)
 const MIN_FACE = 0.22; // face width as a share of the picture
 const FRONT_FRAMES = 3;
+const PEAK_WAIT = 6; // frames (~0.2 s) to wait for a move to reach its peak
 const MAX_SECONDS = 60;
 const CAPTURE_SIDE = 640; // six frames stay well under the 1 MB request limit
 
@@ -52,6 +53,13 @@ export function preloadFaceScan() {
 /** Loads MediaPipe once (self-hosted in /mediapipe), on the GPU where the device allows. */
 function loadLandmarker() {
   landmarkerPromise ??= (async () => {
+    // MediaPipe's WebAssembly prints routine "INFO: ..." lines through console.error,
+    // which the Next.js dev overlay then shows as errors. Drop just those lines.
+    const consoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].startsWith("INFO:")) return;
+      consoleError(...args);
+    };
     const { FilesetResolver, FaceLandmarker } = await import("@mediapipe/tasks-vision");
     const files = await FilesetResolver.forVisionTasks("/mediapipe");
     const create = (delegate: "GPU" | "CPU") =>
@@ -177,7 +185,9 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
     let stable = 0;
     let lastNose: [number, number] | null = null;
     let lastFront = 0;
-    let turnHold = 0;
+    // The best frame of the current move so far (largest turn / most closed eyes), and for how
+    // many frames it has not improved: the move's peak is sent, not the first frame past the line.
+    let peak: { score: number; image: string; flat: number } | null = null;
     let step = -1; // -1 = frontal frames
     let lastTs = -1;
 
@@ -241,20 +251,16 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
           }
         } else {
           const want = challenge.steps[step];
-          let done = false;
-          if (want === "BLINK") {
-            setGood(r.blink >= BLINK_SCORE);
-            done = r.blink >= BLINK_SCORE;
-          } else {
-            const sign = want === "TURN_LEFT" ? 1 : -1;
-            const turned = r.yaw * sign >= TURN_YAW;
-            setGood(turned);
-            turnHold = turned ? turnHold + 1 : 0;
-            done = turnHold >= 2;
-          }
-          if (done) {
-            frames.push({ role: want, image: capture(video) });
-            turnHold = 0;
+          const score = want === "BLINK" ? r.blink : r.yaw * (want === "TURN_LEFT" ? 1 : -1);
+          const reached = score >= (want === "BLINK" ? BLINK_SCORE : TURN_YAW);
+          setGood(reached || !!peak);
+          if (reached && (!peak || score > peak.score)) peak = { score, image: capture(video), flat: 0 };
+          else if (peak) peak.flat += 1;
+          // Done once the move stops growing (2 frames), or after PEAK_WAIT frames at most.
+          const done = !!peak && (peak.flat >= 2 || (!reached && peak.flat >= 1) || peak.flat >= PEAK_WAIT);
+          if (done && peak) {
+            frames.push({ role: want, image: peak.image });
+            peak = null;
             step += 1;
             setStepIndex(step);
             if (step >= challenge.steps.length) {

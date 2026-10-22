@@ -114,8 +114,8 @@ function offlineOneToN() {
   return { bytesPerTemplate: round(bytesPerTemplate), rows, projection, oldCap: 5000 };
 }
 
-/** The same 1:N check with the in-memory face index: search everyone, fetch only the K closest templates. */
-function offlineIndex(bytesPerTemplate: number) {
+/** The same 1:N check with the in-memory face index: search everyone (on all CPU cores), fetch only the K closest templates. */
+async function offlineIndex(bytesPerTemplate: number) {
   console.log("\nPart 1b: 1:N with the in-memory face index (offline)");
   const rows: { enrolled: number; searchMs: number; memoryMB: number; bytesDownloaded: number }[] = [];
   const index = new FaceIndex();
@@ -124,9 +124,10 @@ function offlineIndex(bytesPerTemplate: number) {
     for (; added < n; added++) index.add(`v${added}`, newFace());
     const probes = Array.from({ length: 10 }, () => newFace());
     const t0 = performance.now();
-    for (const p of probes) index.nearest(p, NEAREST_K);
+    await index.nearestParallel(probes[0], NEAREST_K); // start the worker threads
+    for (const p of probes) await index.nearestParallel(p, NEAREST_K);
     const searchMs = ms(t0) / probes.length;
-    const row = { enrolled: n, searchMs: round(searchMs, 1), memoryMB: round((n * 512 * 4) / 1e6), bytesDownloaded: Math.round(NEAREST_K * bytesPerTemplate) };
+    const row = { enrolled: n, searchMs: round(searchMs, 1), memoryMB: round((n * 512) / 1e6), bytesDownloaded: Math.round(NEAREST_K * bytesPerTemplate) };
     rows.push(row);
     console.log(`  ${n.toLocaleString()} enrolled: ${row.searchMs} ms search, ${row.memoryMB} MB in memory, ${(row.bytesDownloaded / 1e3).toFixed(0)} KB fetched per login`);
   }
@@ -134,7 +135,7 @@ function offlineIndex(bytesPerTemplate: number) {
   const projection = {
     enrolled: KENYA_REGISTER,
     searchMsPerLogin: round((last.searchMs * KENYA_REGISTER) / last.enrolled),
-    memoryGB: round((KENYA_REGISTER * 512 * 4) / 1e9, 1),
+    memoryGB: round((KENYA_REGISTER * 512) / 1e9, 1),
     kilobytesPerLogin: round(last.bytesDownloaded / 1e3),
   };
   console.log(`  Projected for ${KENYA_REGISTER.toLocaleString()} voters: ${projection.searchMsPerLogin} ms search on one server, ${projection.memoryGB} GB memory, ${projection.kilobytesPerLogin} KB per login`);
@@ -256,7 +257,7 @@ async function liveLoad() {
 }
 
 // ------------------------------------------------------------------ part 3: face engine per scan
-/** Server time for one scan: 6 frames decoded, detected, aligned and turned into identity vectors. */
+/** Server time for one scan: 6 frames decoded, detected, aligned and turned into identity vectors (frontal ones read twice). */
 async function faceEngine() {
   const { faceModelsInstalled, decodeImage, detectFaces, alignFace, embedAligned, sessions } = await import("../src/lib/faceEngine");
   const dir = process.env.LFW_DIR;
@@ -275,7 +276,8 @@ async function faceEngine() {
     for (let f = 0; f < 6; f++) {
       const img = await decodeImage(buf);
       const face = (await detectFaces(img))[0];
-      if (face) await embedAligned([alignFace(img, face)]);
+      // As in a real scan (lib/faceScan.ts): flip averaging on the 3 frontal frames only.
+      if (face) await embedAligned([alignFace(img, face)], f < 3);
     }
     times.push(ms(t0));
   }
@@ -287,7 +289,7 @@ async function faceEngine() {
 
 async function main() {
   const offline = offlineOneToN();
-  const indexed = offlineIndex(offline.bytesPerTemplate);
+  const indexed = await offlineIndex(offline.bytesPerTemplate);
   const engine = await faceEngine();
   const live = await liveLoad();
   const out = {

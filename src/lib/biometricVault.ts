@@ -35,10 +35,11 @@ function open(blob: string | null | undefined, idNumber: string): Buffer | null 
 }
 
 /**
- * mean + samples: 512-number ArcFace vectors from the server engine (lib/faceEngine.ts).
+ * mean + samples: 512-number ArcFace vectors from the server engine (lib/faceEngine.ts),
+ * taken at registration. learned: frames from confident later logins (faceMath.learnFrame).
  * Older records hold 128-number face-api descriptors; those voters must re-enrol.
  */
-export type FaceTemplateData = { mean: number[]; samples: number[][] };
+export type FaceTemplateData = { mean: number[]; samples: number[][]; learned?: number[][] };
 
 export function encryptFaceTemplate(t: FaceTemplateData, idNumber: string): string {
   return seal(Buffer.from(JSON.stringify(t)), idNumber);

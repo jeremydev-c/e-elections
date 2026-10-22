@@ -91,7 +91,7 @@ async function main() {
   times.sort((a, b) => a - b);
   const result = {
     date: new Date().toISOString(),
-    model: "SCRFD-10GF @320 + 5-point alignment + ArcFace R50 (WebFace600K)",
+    model: `SCRFD-10GF @320 + 5-point alignment + ArcFace R50 (WebFace600K)${process.env.FACE_FLIP === "off" ? "" : " + flip averaging"}`,
     images: files.length,
     noFaceFound: noFace,
     accuracy10fold: Math.round(mean * 10000) / 100,

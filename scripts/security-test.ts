@@ -21,8 +21,10 @@ import {
   FACE_MATCH_MIN,
   RIVAL_MARGIN,
   SAME_SCAN_MIN,
+  LEARN_MIN,
+  MAX_LEARNED,
   cosineSimilarity,
-  faceDistance,
+  learnFrame,
   meanEmbedding,
   templateSimilarity,
 } from "../src/lib/faceMath";
@@ -146,6 +148,23 @@ const near = (p: number[], noise: number) => unit(p.map((x) => x + vrand() * noi
   check("Frames of one person agree", same >= SAME_SCAN_MIN, `similarity ${same.toFixed(3)}`);
 }
 
+// ------------------------------------------------------------ template learning
+{
+  const alice = person();
+  const frame = (p: number[]) => near(p, 0.06);
+  const samples = [frame(alice), frame(alice), frame(alice)];
+  let t: { mean: number[]; samples: number[][]; learned?: number[][] } = { mean: meanEmbedding(samples), samples };
+  const enrolledMean = t.mean.slice();
+  for (let i = 0; i < 10; i++) t = learnFrame(t, frame(alice));
+  check("Learned frames are capped", t.learned?.length === MAX_LEARNED, `${t.learned?.length}`);
+  check("Learning never moves the registered average", t.mean.every((x, i) => x === enrolledMean[i]));
+  // An impostor who somehow got learned frames in still needs the registered face for half the score.
+  const bob = person();
+  const poisoned = learnFrame(learnFrame(t, frame(bob)), frame(bob));
+  const bobScore = templateSimilarity(poisoned, frame(bob));
+  check("Poisoned learned frames can't make a stranger pass", bobScore < LEARN_MIN && bobScore < 0.6, `similarity ${bobScore.toFixed(3)}`);
+}
+
 // ------------------------------------------------------------------ proxy
 {
   const req = (method: string, headers: Record<string, string>) =>
@@ -182,18 +201,31 @@ async function livenessTests() {
   faces.forEach((f, i) => index.add(`v${i}`, f));
   check("Index holds every voter (no 5,000-style cap, grows past its first block)", index.size === 3000, `${index.size}`);
 
-  let agree = 0;
+  // The index stores 8-bit numbers (a quarter of the memory); compare with exact 32-bit cosine ranking.
+  let sameBest = 0;
+  let overlap = 0;
   for (let q = 0; q < 25; q++) {
     const probe = near(faces[q * 37], 0.06);
-    const brute = faces
-      .map((f, i) => ({ id: `v${i}`, d: faceDistance(f, probe) }))
-      .sort((x, y) => x.d - y.d)
+    const exact = faces
+      .map((f, i) => ({ id: `v${i}`, s: cosineSimilarity(f, probe) }))
+      .sort((x, y) => y.s - x.s)
       .slice(0, 10)
-      .map((x) => x.id)
-      .join();
-    if (index.nearest(probe, 10).map((n) => n.id).join() === brute) agree++;
+      .map((x) => x.id);
+    const found = index.nearest(probe, 10).map((n) => n.id);
+    if (found[0] === exact[0]) sameBest++;
+    overlap += found.filter((id) => exact.includes(id)).length;
   }
-  check("Index finds exactly the same 10 closest faces as checking everyone", agree === 25, `${agree}/25 queries`);
+  check("8-bit index always finds the truly closest face", sameBest === 25, `${sameBest}/25 queries`);
+  // Ranks below the closest are random strangers at ~0 similarity, where 8-bit rounding may reorder
+  // meaningless near-ties. What matters: every genuinely similar face is found.
+  const source = faces[1234];
+  const planted = [0.03, 0.05, 0.07, 0.09, 0.11].map((noise, i) => {
+    const v = near(source, noise);
+    index.add(`look${i}`, v);
+    return `look${i}`;
+  });
+  const hitsAll = index.nearest(near(source, 0.04), 10).map((n) => n.id);
+  check("8-bit index finds every lookalike among 3,000 voters", ["v1234", ...planted].every((id) => hitsAll.includes(id)), `${overlap}/250 overlap with exact top-10`);
 
   const twin = near(faces[500], 0.075);
   index.add("twin", twin);
@@ -201,7 +233,7 @@ async function livenessTests() {
   check("Lookalike found among 3,000 voters (claimed voter excluded)", hits[0] === "twin" && !hits.includes("v500"), hits.join(","));
 
   index.add("v7", faces[8]);
-  check("Re-enrolling a voter updates their entry instead of duplicating it", index.size === 3001 && index.nearest(faces[8], 2).map((n) => n.id).sort().join() === "v7,v8");
+  check("Re-enrolling a voter updates their entry instead of duplicating it", index.size === 3006 && index.nearest(faces[8], 2).map((n) => n.id).sort().join() === "v7,v8");
 }
 
 livenessTests().then(() => {

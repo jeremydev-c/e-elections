@@ -8,7 +8,7 @@ import { pinProblem } from "@/lib/pin";
 import { FACE_MATCH_MIN, templateSimilarity } from "@/lib/faceMath";
 import { encryptFaceTemplate, encryptPhoto } from "@/lib/biometricVault";
 import { faceModelsInstalled } from "@/lib/faceEngine";
-import { closestTemplates, indexVoter, isCurrentTemplate } from "@/lib/faceIndex";
+import { closestTemplates, faceIndex, indexVoter, isCurrentTemplate } from "@/lib/faceIndex";
 import { SCAN_MESSAGES, analyseScan } from "@/lib/faceScan";
 import { redeemChallenge } from "@/lib/livenessChallenge";
 import { enrollFace, redeemLiveFace, removeFace, searchFace } from "@/lib/awsFace";
@@ -119,6 +119,9 @@ export async function POST(req: NextRequest) {
   if (!steps) {
     return NextResponse.json({ error: "The face scan expired or was already used. Scan again." }, { status: 400 });
   }
+  // Bring the face index up to date (database round trips) while the frames are checked.
+  const indexReady = faceIndex({ fresh: true });
+  indexReady.catch(() => {});
   const scan = await analyseScan(b.frames, steps);
   if (!scan.ok) {
     await audit("LIVENESS_FAILED", { req, severity: "warning", actor: admin.username, idNumber, detail: `Registration scan: ${scan.detail}` });
@@ -127,7 +130,8 @@ export async function POST(req: NextRequest) {
 
   // One person, one registration: reject a face that is already enrolled
   // under a different ID number (checked against the closest faces on the whole register).
-  const nearest = await closestTemplates(scan.embedding);
+  await indexReady;
+  const nearest = await closestTemplates(scan.embedding, { fresh: true });
   const duplicate = nearest.some((t) => isCurrentTemplate(t) && templateSimilarity(t, scan.embedding) >= FACE_MATCH_MIN);
   if (duplicate) {
     await audit("DUPLICATE_FACE_BLOCKED", { req, severity: "warning", actor: admin.username, idNumber, detail: "Face already enrolled under another ID" });

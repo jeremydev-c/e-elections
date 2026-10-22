@@ -22,7 +22,8 @@ import * as ort from "onnxruntime-node";
  */
 
 export const EMBEDDING_SIZE = 512;
-const MODEL_DIR = process.env.FACE_MODEL_DIR || path.join(process.cwd(), "ml-models");
+// Read at run time from the server folder (turbopackIgnore: not files the build should bundle or trace).
+const MODEL_DIR = process.env.FACE_MODEL_DIR || path.join(/* turbopackIgnore: true */ process.cwd(), "ml-models");
 const MODELS = {
   detector: "det_10g.onnx",
   recognizer: "w600k_r50.onnx",
@@ -40,7 +41,7 @@ type Sessions = Record<keyof typeof MODELS, ort.InferenceSession>;
 const globalForEngine = globalThis as unknown as { _faceSessions?: Promise<Sessions> };
 
 export function faceModelsInstalled() {
-  return Object.values(MODELS).every((f) => existsSync(path.join(MODEL_DIR, f)));
+  return Object.values(MODELS).every((f) => existsSync(path.join(/* turbopackIgnore: true */ MODEL_DIR, f)));
 }
 
 /**
@@ -54,12 +55,12 @@ async function load(file: string, gpu: boolean) {
   const opts: ort.InferenceSession.SessionOptions = { graphOptimizationLevel: "all", logSeverityLevel: 3 };
   if (gpu) {
     try {
-      return await ort.InferenceSession.create(path.join(MODEL_DIR, file), { ...opts, executionProviders: ["dml", "cpu"] });
+      return await ort.InferenceSession.create(path.join(/* turbopackIgnore: true */ MODEL_DIR, file), { ...opts, executionProviders: ["dml", "cpu"] });
     } catch {
       // No usable GPU: fall through to the CPU.
     }
   }
-  return ort.InferenceSession.create(path.join(MODEL_DIR, file), opts);
+  return ort.InferenceSession.create(path.join(/* turbopackIgnore: true */ MODEL_DIR, file), opts);
 }
 
 /** Loads the four networks once per server process (~1-2 s the first time). */
@@ -261,14 +262,40 @@ function l2normalize(v: Float32Array) {
 }
 
 /** 512-number identity vectors (unit length) for aligned faces. One at a time: the exported model has a fixed batch of 1. */
-export async function embedAligned(aligned: RGBImage[]): Promise<number[][]> {
+export async function embedAligned(aligned: RGBImage[], flip = FLIP_AVERAGE): Promise<number[][]> {
   const { recognizer } = await sessions();
+  const run = async (a: RGBImage) =>
+    (await recognizer.run({ [recognizer.inputNames[0]]: toTensor([a], 127.5, 127.5) }))[recognizer.outputNames[0]].data as Float32Array;
   const out: number[][] = [];
   for (const a of aligned) {
-    const r = await recognizer.run({ [recognizer.inputNames[0]]: toTensor([a], 127.5, 127.5) });
-    out.push(l2normalize(r[recognizer.outputNames[0]].data as Float32Array));
+    const v = await run(a);
+    if (flip) {
+      // Flip averaging: also read the mirror image and add the two vectors, so lighting
+      // from one side or a slight head turn moves the result less.
+      const m = await run(mirror(a));
+      for (let i = 0; i < v.length; i++) v[i] += m[i];
+    }
+    out.push(l2normalize(v));
   }
   return out;
+}
+
+/** Read every face twice (as is and mirrored) and average. FACE_FLIP=off to disable. */
+const FLIP_AVERAGE = process.env.FACE_FLIP !== "off";
+
+function mirror(img: RGBImage): RGBImage {
+  const { data, width: w, height: h } = img;
+  const out = new Uint8Array(data.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const s = (y * w + x) * 3;
+      const d = (y * w + (w - 1 - x)) * 3;
+      out[d] = data[s];
+      out[d + 1] = data[s + 1];
+      out[d + 2] = data[s + 2];
+    }
+  }
+  return { data: out, width: w, height: h };
 }
 
 /** Cosine similarity of two unit vectors (1 = identical, ~0 = unrelated people). */

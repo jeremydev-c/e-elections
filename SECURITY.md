@@ -45,8 +45,10 @@ Failures count towards the same lockout as failed face matches, and are written 
 ## Biometrics
 
 - Face recognition runs **on the server** (`src/lib/faceEngine.ts`, ONNX Runtime): SCRFD-10GF finds the face and 5 keypoints, a similarity transform aligns it to the standard 112×112 ArcFace template, and ArcFace ResNet-50 (WebFace600K) produces a 512-number identity vector. A template is the average of three frontal frames plus the frames themselves. Matching uses cosine similarity: at least 0.40 to the claimed voter, and no other voter within 0.08 of that.
-- Measured on LFW (`scripts/benchmark-lfw.ts`, official 10-fold protocol): 99.85% verification accuracy; the most similar impostor pair of 3,000 scored 0.245, so the 0.40 threshold has a wide margin. InsightFace reports 90.3% true accepts on African faces at a one-in-a-million false-accept rate for this model, against 69.5% for the small mobile model.
-- **1:N checks use an in-memory face index** (`src/lib/faceIndex.ts`). The server keeps each voter's average face vector in memory (2 KB per voter), searches the **entire** register exactly, then decrypts only the 10 closest full templates. This is used to block one face registering under two IDs and to reject a login when another voter matches as well as the claimed one. There is no cap on register size; the index catches up with new registrations every 2 seconds and rebuilds itself if voters are deleted. The vectors live only in server memory, never in the database unencrypted.
+- The three frontal frames are each read twice, as taken and mirrored, and the two vectors averaged (flip averaging): on LFW this raised true accepts at the threshold from 98.90% to 99.07% with no impostor closer.
+- Templates learn: a login at least 0.60 similar adds that scan to the voter's template (at most 4 learned frames, the most redundant one replaced), so the template copes with new lighting, glasses or a haircut. Learned frames only count towards the "closest frame" half of the score; the registration average always makes up the other half and never changes, so the template cannot drift to someone else (tested in `scripts/security-test.ts`).
+- Measured on LFW (`scripts/benchmark-lfw.ts`, official 10-fold protocol): 99.85% verification accuracy; the most similar impostor pair of 3,000 scored 0.242, so the 0.40 threshold has a wide margin. InsightFace reports 90.3% true accepts on African faces at a one-in-a-million false-accept rate for this model, against 69.5% for the small mobile model.
+- **1:N checks use an in-memory face index** (`src/lib/faceIndex.ts`). The server keeps each voter's average face vector in memory as 8-bit numbers (512 bytes per voter), searches the **entire** register on all CPU cores at once (worker threads sharing the memory), then decrypts only the 10 closest full templates and compares them exactly. One million voters: about 0.2 s and 0.5 GB on a laptop. Logins search the index as it is while it refreshes in the background; registrations wait for it to be fully up to date. This is used to block one face registering under two IDs and to reject a login when another voter matches as well as the claimed one. There is no cap on register size; the index catches up with new registrations every 2 seconds and rebuilds itself if voters are deleted. The vectors live only in server memory, never in the database unencrypted.
 - Fingerprints use **WebAuthn**: the fingerprint stays on the voter's device, and the server only sees a signed challenge.
 - Biometric data is "sensitive personal data" under Kenya's Data Protection Act 2019. Any real deployment needs informed consent (parental consent for minors), a data-protection impact assessment and registration with the Office of the Data Protection Commissioner.
 
@@ -71,13 +73,13 @@ This is a prototype. Before any binding election it would need:
 - calibrating the passive anti-spoofing model on real voters' cameras before enforcing it;
 - protection against a compromised voter device (malware on the phone or browser);
 - a distributed rate limiter and liveness-token store (the current ones are per server instance);
-- for a national register (tens of millions), the face index split across servers (for example by county) or a compressed / approximate nearest-neighbour index, since one server holding everyone needs about 45 GB of memory;
+- for a national register (22 million), the face index split across a few servers: one laptop-class server would need about 11 GB and 4-5 s per search;
 - operational procedures: key ceremonies, backups, observers and legal approval.
 
 ## Tests
 
 ```bash
-npx tsx scripts/security-test.ts      # 30 offline checks: seals, tamper attacks, encryption, face decisions, liveness tokens, CSRF
+npx tsx scripts/security-test.ts      # 34 offline checks: seals, tamper attacks, encryption, face decisions, template learning, 8-bit index, liveness tokens, CSRF
 LFW_DIR=... npx tsx scripts/face-engine-test.ts   # 13 checks on real photos: every way a face scan must be refused, real matching
 LFW_DIR=... npx tsx scripts/benchmark-lfw.ts      # accuracy on the LFW benchmark
 ```
