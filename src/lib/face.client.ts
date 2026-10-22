@@ -217,8 +217,24 @@ export async function analyzeLiveFrame(
   const vw = video.videoWidth || 640;
   const vh = video.videoHeight || 480;
 
-  const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
-  const allDetections = await faceapi.detectAllFaces(video, options).withFaceLandmarks();
+  // The tiny detector is fast but misses faces in dim light, darker skin tones and
+  // smaller faces. Use a lenient cutoff, and when it still sees nothing, ask the
+  // precise SSD detector before telling the voter no face was found.
+  const tinyOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
+  let found = await faceapi.detectAllFaces(video, tinyOptions).withFaceLandmarks();
+  if (found.length === 0) {
+    const ssdOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.4 });
+    found = await faceapi.detectAllFaces(video, ssdOptions).withFaceLandmarks();
+  }
+  // With a lenient cutoff, a faint background blob must not count as a second person:
+  // other faces only count when confident and at least half the size of the main one.
+  found.sort((a, b) => b.detection.box.area - a.detection.box.area);
+  const main = found[0];
+  const allDetections = main
+    ? found.filter(
+        (d, i) => i === 0 || (d.detection.score >= 0.6 && d.detection.box.width >= main.detection.box.width * 0.5)
+      )
+    : [];
 
   if (allDetections.length === 0) {
     return {
@@ -316,11 +332,14 @@ export async function computeDescriptorFromVideo(
   faceapi: FaceApi,
   requireFrontal = false
 ): Promise<Float32Array | null> {
-  const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
-  const result = await faceapi
-    .detectSingleFace(video, options)
-    .withFaceLandmarks()
-    .withFaceDescriptor();
+  const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 });
+  const result =
+    (await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor()) ??
+    // Turned heads often slip past the tiny detector; SSD catches them.
+    (await faceapi
+      .detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+      .withFaceLandmarks()
+      .withFaceDescriptor());
 
   if (!result) return null;
 

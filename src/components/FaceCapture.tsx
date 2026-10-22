@@ -207,6 +207,7 @@ export function FaceCapture({
   // Real-time canvas render loop
   function startLiveTelemetryLoop(api: typeof import("@vladmandic/face-api")) {
     let lastInference = 0;
+    let lastSeen = -Infinity;
     runningRef.current = true;
 
     async function tick(now: number) {
@@ -225,7 +226,10 @@ export function FaceCapture({
           lastInference = now;
           try {
             const data = await analyzeLiveFrame(video, api);
-            if (data && runningRef.current) {
+            // Ride over a brief single-frame miss instead of flashing "Looking for face".
+            const blip = data && !data.faceFound && now - lastSeen < 500;
+            if (data?.faceFound) lastSeen = now;
+            if (data && !blip && runningRef.current) {
               telemetryRef.current = data;
               setTelemetry(data);
               if (isCapturingRef.current) handleGuidedProgression(data, video, api, now);
