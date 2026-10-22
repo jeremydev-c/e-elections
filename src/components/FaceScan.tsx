@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Camera, CheckCircle2, Loader2, RotateCcw } from "lucide-react";
 import type { FaceLandmarker, FaceLandmarkerResult } from "@mediapipe/tasks-vision";
 import type { LivenessStep } from "@/lib/liveness";
+import { useI18n } from "@/lib/i18n/I18n";
 
 /**
  * The camera side of a face scan. MediaPipe Face Landmarker (478 points, blink scores)
@@ -36,11 +37,8 @@ const PEAK_WAIT = 6; // frames (~0.2 s) to wait for a move to reach its peak
 const MAX_SECONDS = 60;
 const CAPTURE_SIDE = 640; // six frames stay well under the 1 MB request limit
 
-const PROMPTS: Record<LivenessStep, string> = {
-  TURN_LEFT: "Turn your head to your left",
-  TURN_RIGHT: "Turn your head to your right",
-  BLINK: "Close your eyes for a second",
-};
+/** Dictionary key of each move's prompt (faceScan.prompts.*). */
+const PROMPT = (step: LivenessStep) => `faceScan.prompts.${step}`;
 const ICONS: Record<LivenessStep, string> = { TURN_LEFT: "◂", TURN_RIGHT: "▸", BLINK: "◉" };
 
 let landmarkerPromise: Promise<FaceLandmarker> | null = null;
@@ -115,7 +113,9 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef(0);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
-  const [hint, setHint] = useState("Look at the camera");
+  const { t, serverText } = useI18n();
+  // A dictionary key, so the hint follows the reader's language.
+  const [hint, setHint] = useState("faceScan.lookAtCamera");
   const [frontCount, setFrontCount] = useState(0);
   const [stepIndex, setStepIndex] = useState(-1);
   const [steps, setSteps] = useState<LivenessStep[]>([]);
@@ -148,8 +148,8 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
     setStepIndex(-1);
     setGood(false);
     try {
-      setPhase({ kind: "starting", msg: "Opening the camera…" });
-      if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("This browser cannot use the camera."), { name: "NoCamera" });
+      setPhase({ kind: "starting", msg: t("faceScan.opening") });
+      if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error(t("faceScan.browserNoCamera")), { name: "NoCamera" });
       const [stream, landmarker, challenge] = await Promise.all([
         navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }),
         loadLandmarker(),
@@ -169,12 +169,12 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
         kind: "error",
         msg:
           e.name === "NotAllowedError"
-            ? "Camera permission denied. Allow camera access (padlock icon in the address bar) and try again."
+            ? t("faceScan.cameraDenied")
             : e.name === "NotFoundError"
-              ? "No camera found on this device. Use Fingerprint instead."
+              ? t("faceScan.noCamera")
               : e.name === "NotReadableError"
-                ? "The camera is in use by another app. Close it and try again."
-                : e.message || "Could not start the face scan.",
+                ? t("faceScan.cameraBusy")
+                : serverText(e.message) || t("faceScan.startFailed"),
       });
     }
   }
@@ -199,7 +199,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
         await onScan({ liveness: { token: challenge.token }, frames, seconds });
         setPhase({ kind: "idle" });
       } catch (err) {
-        setPhase({ kind: "error", msg: (err as Error).message || "The face scan was not accepted." });
+        setPhase({ kind: "error", msg: serverText((err as Error).message) || t("faceScan.notAccepted") });
       }
     };
 
@@ -208,7 +208,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
       const now = performance.now();
       if ((now - started) / 1000 > MAX_SECONDS) {
         stop();
-        setPhase({ kind: "error", msg: "The scan took too long. Try again in good light." });
+        setPhase({ kind: "error", msg: t("faceScan.tooLong") });
         return;
       }
       if (video.readyState >= 2 && video.currentTime !== lastTs) {
@@ -216,15 +216,15 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
         const r = read(landmarker.detectForVideo(video, now), video.videoWidth, video.videoHeight);
         if (!r) {
           setGood(false);
-          setHint("Look at the camera");
+          setHint("faceScan.lookAtCamera");
           stable = 0;
         } else if (r.others) {
           setGood(false);
-          setHint("Only you should be in the picture");
+          setHint("faceScan.onlyYou");
           stable = 0;
         } else if (r.width < MIN_FACE) {
           setGood(false);
-          setHint("Come a little closer");
+          setHint("faceScan.closer");
           stable = 0;
         } else if (step < 0) {
           // Frontal frames: face straight, held still for a moment.
@@ -234,10 +234,10 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
           setGood(front);
           if (!front) {
             stable = 0;
-            setHint("Look straight at the camera");
+            setHint("faceScan.lookStraight");
           } else {
             stable = still ? stable + 1 : 0;
-            setHint("Hold still…");
+            setHint("faceScan.holdStill");
             if (stable >= 3 && now - lastFront > 90) {
               frames.push({ role: "FRONT", image: capture(video) });
               lastFront = now;
@@ -245,7 +245,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
               if (frames.length === FRONT_FRAMES) {
                 step = 0;
                 setStepIndex(0);
-                setHint(PROMPTS[challenge.steps[0]]);
+                setHint(PROMPT(challenge.steps[0]));
               }
             }
           }
@@ -267,7 +267,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
               void finish();
               return;
             }
-            setHint(PROMPTS[challenge.steps[step]]);
+            setHint(PROMPT(challenge.steps[step]));
           }
         }
       }
@@ -308,7 +308,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
             <div className="absolute inset-x-4 bottom-5 text-center">
               <span className="inline-block rounded-full bg-ink/75 px-4 py-2 text-base font-semibold text-paper shadow-lg">
                 {prompt && <span className="mr-1.5 text-amber-300">{ICONS[prompt]}</span>}
-                {hint}
+                {t(hint)}
               </span>
             </div>
           </>
@@ -321,7 +321,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
             {phase.kind === "checking" && (
               <>
                 <CheckCircle2 className="size-8 text-[#8fd19e]" aria-hidden />
-                <p className="text-sm">Scanned in {phase.seconds} s. Checking with the register…</p>
+                <p className="text-sm">{t("faceScan.checking", { s: phase.seconds })}</p>
                 <Loader2 className="size-4 animate-spin" aria-hidden />
               </>
             )}
@@ -329,7 +329,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
               <>
                 {phase.kind === "error" && <p className="text-sm text-red-200">{phase.msg}</p>}
                 <p className="text-sm text-paper/80">
-                  Look at the camera, then do three quick moves. Takes about 5 seconds.
+                  {t("faceScan.intro")}
                 </p>
                 <button
                   type="button"
@@ -337,7 +337,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
                   className="inline-flex items-center gap-2 rounded-xl bg-forest px-5 py-2.5 text-sm font-semibold text-paper hover:bg-forest-deep"
                 >
                   {phase.kind === "error" ? <RotateCcw className="size-4" aria-hidden /> : <Camera className="size-4" aria-hidden />}
-                  {phase.kind === "error" ? "Try again" : actionLabel}
+                  {phase.kind === "error" ? t("common.tryAgain") : actionLabel}
                 </button>
               </>
             )}

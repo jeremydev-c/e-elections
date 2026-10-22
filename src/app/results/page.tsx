@@ -3,12 +3,13 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Loader2, Pause, Play, RefreshCw, SearchCheck, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Fingerprint, Loader2, Pause, Play, RefreshCw, SearchCheck, ShieldAlert, ShieldCheck } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
 import { LedgerAuditPanel, type LiveAudit } from "@/components/LedgerAuditPanel";
 import { ReceiptVerifier } from "@/components/ReceiptVerifier";
 import { useToast } from "@/components/Toast";
-import { POSITIONS, POSITION_LABELS, type Position } from "@/lib/positions";
+import { useI18n } from "@/lib/i18n/I18n";
+import { POSITIONS, type Position } from "@/lib/positions";
 import { COUNTIES } from "@/lib/regions";
 
 const REFRESH_MS = 3000;
@@ -48,6 +49,8 @@ export default function ResultsPage() {
 function ResultsDashboard() {
   const receiptParam = useSearchParams().get("receipt") ?? "";
   const toast = useToast();
+  const { t, serverText, regionText, locale } = useI18n();
+  const num = (n: number) => n.toLocaleString(locale);
 
   const [data, setData] = useState<ResultsOverview | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -89,9 +92,7 @@ function ResultsDashboard() {
     try {
       const overviewReq = fetch("/api/results", { cache: "no-store" });
       const regionalReq =
-        position === "PRESIDENT"
-          ? null
-          : fetch(`/api/results/region?position=${position}&regionCode=${regionCode}`, { cache: "no-store" });
+        position === "PRESIDENT" ? null : fetch(`/api/results/region?position=${position}&regionCode=${regionCode}`, { cache: "no-store" });
 
       const res = await overviewReq;
       const d = await res.json();
@@ -101,7 +102,7 @@ function ResultsDashboard() {
       setLastUpdated(Date.now());
 
       if (prevIntact.current && !d.audit.ledgerIntact) {
-        toast.error("LEDGER TAMPERING DETECTED", "A ballot failed SHA-256 verification. See the audit panel.");
+        toast.error(t("results.toastTamperTitle"), t("results.toastTamperBody"));
       }
       prevIntact.current = d.audit.ledgerIntact;
 
@@ -116,17 +117,17 @@ function ResultsDashboard() {
         markChanges(d.presidential.candidates);
       }
     } catch (err) {
-      setLoadError((err as Error).message);
+      setLoadError(serverText((err as Error).message));
     } finally {
       inFlight.current = false;
       setRefreshing(false);
     }
-  }, [position, regionCode, markChanges, toast]);
+  }, [position, regionCode, markChanges, toast, t, serverText]);
 
   // Initial load + whenever the race / region changes.
   useEffect(() => {
-    const t = setTimeout(refresh, 0);
-    return () => clearTimeout(t);
+    const id = setTimeout(refresh, 0);
+    return () => clearTimeout(id);
   }, [refresh]);
 
   // Live auto-refresh every 3 seconds.
@@ -147,20 +148,23 @@ function ResultsDashboard() {
   const rows = position === "PRESIDENT" ? data?.presidential.candidates : regional?.candidates;
   const total = position === "PRESIDENT" ? data?.presidential.totalVotes : regional?.totalVotes;
   const secondsAgo = lastUpdated ? Math.max(0, Math.round((now - lastUpdated) / 1000)) : null;
+  const intact = !data || data.audit.ledgerIntact;
+  const status = data?.election.status;
 
   return (
-    <main className="mx-auto min-h-dvh max-w-6xl space-y-6 px-4 py-8">
-      <PageTitle eyebrow="Official Real-Time Tally & Cryptographic Audit" title="Live Election Results">
+    <main className="mx-auto min-h-dvh max-w-6xl space-y-8 px-4 py-12">
+      <PageTitle eyebrow={t("results.eyebrow")} title={t("results.title")}>
         <div className="flex items-center gap-2 text-xs">
-          <span className="flex items-center gap-2 rounded-full border border-line bg-paper px-3 py-1.5 text-ink-soft">
-            <span className={`size-2 rounded-full ${autoRefresh ? "animate-pulse bg-forest" : "bg-ink-faint"}`} />
-            {autoRefresh ? "LIVE" : "PAUSED"}
-            {secondsAgo !== null && <span className="text-ink-faint">· {secondsAgo}s ago</span>}
+          <span className="flex items-center gap-2 whitespace-nowrap rounded-full border border-line-strong px-3 py-1.5 font-mono uppercase tracking-wider text-ink-soft">
+            <span className={`size-2 rounded-full ${autoRefresh ? "animate-pulse bg-clay" : "bg-ink-faint"}`} />
+            {autoRefresh ? t("results.live") : t("results.paused")}
+            {secondsAgo !== null && <span className="normal-case tracking-normal text-ink-faint">· {t("common.secondsAgo", { s: secondsAgo })}</span>}
           </span>
           <button
             onClick={() => setAutoRefresh((v) => !v)}
             className="btn-ghost p-2"
-            title={autoRefresh ? "Pause auto-refresh" : "Resume auto-refresh"}
+            title={autoRefresh ? t("results.pause") : t("results.resume")}
+            aria-label={autoRefresh ? t("results.pause") : t("results.resume")}
           >
             {autoRefresh ? <Pause className="size-4" /> : <Play className="size-4" />}
           </button>
@@ -170,7 +174,8 @@ function ResultsDashboard() {
               refresh();
             }}
             className="btn-ghost p-2"
-            title="Refresh now"
+            title={t("results.refreshNow")}
+            aria-label={t("results.refreshNow")}
           >
             <RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} />
           </button>
@@ -178,57 +183,67 @@ function ResultsDashboard() {
       </PageTitle>
 
       {loadError && (
-        <p role="alert" className="rounded-xl border border-ochre/40 bg-ochre-soft p-3 text-sm text-ochre-deep">
-          Could not reach the results server ({loadError}). Retrying every 3 seconds…{" "}
+        <p role="alert" className="rounded-xl border border-ochre/40 bg-ochre-soft p-3.5 text-sm text-ochre-deep">
+          {t("results.unreachable", { error: loadError })}{" "}
           <Link href="/setup" className="underline">
-            Check setup
+            {t("results.checkSetup")}
           </Link>
         </p>
       )}
 
-      {/* KPI row */}
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="Election status" value={data?.election.status ?? "…"} sub={data?.election.name ?? "General Election 2027"} />
-        <Kpi
-          label="National turnout"
-          value={`${data?.election.turnoutPercent ?? 0}%`}
-          sub={<Bar percent={data?.election.turnoutPercent ?? 0} color="#1f5a39" />}
+      {/* Figures */}
+      <section className="grid grid-cols-2 overflow-hidden rounded-2xl border border-line lg:grid-cols-4">
+        <Figure
+          label={t("results.status")}
+          value={status ? (t(`results.statusValues.${status}`) ?? status) : "…"}
+          sub={data?.election.name ?? t("results.defaultName")}
         />
-        <Kpi
-          label="Ballots cast"
-          value={(data?.election.totalVotesCast ?? 0).toLocaleString()}
-          sub={`of ${(data?.election.totalRegistered ?? 0).toLocaleString()} registered`}
+        <Figure label={t("results.turnout")} value={`${data?.election.turnoutPercent ?? 0}%`} sub={<Bar percent={data?.election.turnoutPercent ?? 0} color="#0b5d3b" />} />
+        <Figure
+          label={t("results.ballotsCast")}
+          value={num(data?.election.totalVotesCast ?? 0)}
+          sub={t("results.ofRegistered", { n: num(data?.election.totalRegistered ?? 0) })}
         />
-        <Kpi
-          label="Ledger integrity"
-          tone={data && !data.audit.ledgerIntact ? "bad" : "good"}
-          value={!data ? "…" : data.audit.ledgerIntact ? "100% intact" : "TAMPERED"}
-          sub={`${data?.audit.blocksVerified ?? 0} ballots SHA-256 verified`}
-          icon={data && !data.audit.ledgerIntact ? <ShieldAlert className="size-4" /> : <ShieldCheck className="size-4" />}
+        <Figure
+          label={t("results.integrity")}
+          tone={intact ? "good" : "bad"}
+          value={!data ? "…" : intact ? t("results.intact") : t("results.tampered")}
+          sub={t("results.verifiedCount", { n: num(data?.audit.blocksVerified ?? 0) })}
+          icon={intact ? <ShieldCheck className="size-4" /> : <ShieldAlert className="size-4" />}
         />
       </section>
 
+      {data?.audit.merkleRoot && (
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-ink-soft">
+          <Fingerprint className="size-4 text-forest" aria-hidden />
+          <span className="uppercase tracking-wider text-ink-faint">{t("results.fingerprint")}</span>
+          <span className="break-all text-ink">{data.audit.merkleRoot}</span>
+          <span className="text-ink-faint">· {t("results.chains", { n: data.audit.chains })}</span>
+        </p>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        {/* Race results */}
-        <section className="glass space-y-5 p-5 sm:p-7">
-          <div className="flex flex-wrap gap-2">
+        {/* Races */}
+        <section className="glass space-y-6 p-6 sm:p-8">
+          <div className="flex flex-wrap gap-1.5">
             {POSITIONS.map((pos) => (
               <button
                 key={pos}
                 onClick={() => setPosition(pos)}
-                className={`shrink-0 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
-                  position === pos ? "bg-forest font-bold text-white" : "bg-paper text-ink-soft hover:text-ink"
+                aria-pressed={position === pos}
+                className={`rounded-full px-3.5 py-1.5 text-sm transition ${
+                  position === pos ? "bg-ink font-semibold text-paper" : "text-ink-soft hover:bg-paper-2 hover:text-ink"
                 }`}
               >
-                {POSITION_LABELS[pos]}
+                {t(`positions.${pos}`)}
               </button>
             ))}
           </div>
 
           {position !== "PRESIDENT" && (
-            <div className="grid gap-3 rounded-2xl border border-line bg-paper p-4 sm:grid-cols-3">
+            <div className="grid gap-3 rounded-xl border border-line p-4 sm:grid-cols-3">
               <Select
-                label="County"
+                label={t("common.county")}
                 value={countyCode}
                 onChange={(v) => {
                   const c = COUNTIES.find((x) => x.code === v);
@@ -240,7 +255,7 @@ function ResultsDashboard() {
               />
               {(position === "MP" || position === "MCA") && (
                 <Select
-                  label="Constituency"
+                  label={t("common.constituency")}
                   value={constituencyCode}
                   onChange={(v) => {
                     setConstituencyCode(v);
@@ -251,7 +266,7 @@ function ResultsDashboard() {
               )}
               {position === "MCA" && (
                 <Select
-                  label="Ward"
+                  label={t("common.ward")}
                   value={wardCode}
                   onChange={setWardCode}
                   options={(constituency?.wards ?? []).map((w) => ({ value: w.code, label: w.name }))}
@@ -260,71 +275,55 @@ function ResultsDashboard() {
             </div>
           )}
 
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-forest">
-              {position === "PRESIDENT" ? "Republic of Kenya · National tally" : (regional?.regionTitle ?? "Regional race")}
+          <div className="border-b border-line pb-5">
+            <p className="eyebrow">
+              {position === "PRESIDENT" ? t("results.nationalTally") : regional ? regionText(regional.regionTitle) : t("results.regionalRace")}
             </p>
-            <h2 className="font-display mt-0.5 text-xl font-bold text-ink">{POSITION_LABELS[position]}</h2>
-            <p className="mt-1 text-xs text-ink-soft">
-              Valid votes: <strong className="text-ink">{(total ?? 0).toLocaleString()}</strong> · counted from the
-              verified ledger
-            </p>
+            <h2 className="mt-2 font-display text-4xl text-ink">{t(`positions.${position}`)}</h2>
+            <p className="mt-1 text-sm text-ink-soft">{t("results.validVotes", { n: num(total ?? 0) })}</p>
           </div>
 
           {!rows ? (
             <div className="py-14 text-center text-ink-soft">
               <Loader2 className="mx-auto size-8 animate-spin text-forest" />
-              <p className="mt-2 text-xs">Aggregating live ledger tallies…</p>
+              <p className="mt-3 text-sm">{t("results.aggregating")}</p>
             </div>
           ) : rows.length === 0 ? (
-            <p className="py-10 text-center text-sm text-ink-soft">
-              No candidates found. Seed demo data on the{" "}
+            <p className="py-10 text-center text-ink-soft">
+              {t("results.noCandidates")}{" "}
               <Link href="/setup" className="text-forest underline">
-                Setup
-              </Link>{" "}
-              page.
+                {t("results.setupPage")}
+              </Link>
+              .
             </p>
           ) : (
-            <ol className="space-y-3">
+            <ol className="space-y-5">
               {rows.map((c, idx) => {
                 const leader = idx === 0 && c.votes > 0;
                 return (
-                  <li
-                    key={c.id}
-                    className={`space-y-2.5 rounded-2xl border p-4 transition duration-500 ${
-                      flash.has(c.id)
-                        ? "border-forest bg-forest-soft ring-4 ring-forest/30"
-                        : leader
-                          ? "border-forest/40 bg-forest-soft"
-                          : "border-line bg-paper"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
+                  <li key={c.id} className={`rounded-xl transition duration-500 ${flash.has(c.id) ? "bg-forest-soft ring-4 ring-forest-soft" : ""}`}>
+                    <div className="flex items-end justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-3">
-                        <span
-                          className={`grid size-7 shrink-0 place-items-center rounded-lg text-xs font-bold ${
-                            leader ? "bg-forest text-white" : "bg-paper-2 text-ink-soft"
-                          }`}
-                        >
-                          {idx + 1}
-                        </span>
+                        <span className={`font-display text-3xl leading-none ${leader ? "text-forest" : "text-line-strong"}`}>{idx + 1}</span>
                         <div className="min-w-0">
-                          <p className="truncate font-bold text-ink">{c.name}</p>
-                          <p className="flex items-center gap-1.5 text-xs text-ink-soft">
+                          <p className="truncate text-lg font-semibold text-ink">{c.name}</p>
+                          <p className="flex items-center gap-1.5 text-sm text-ink-soft">
                             <span className="size-2 rounded-full" style={{ backgroundColor: c.partyColor }} />
                             {c.party}
                           </p>
                         </div>
                       </div>
                       <div className="shrink-0 text-right">
-                        <p className="text-xl font-bold tabular-nums text-ink">{c.percent}%</p>
-                        <p className="text-xs tabular-nums text-ink-soft">
-                          {c.votes.toLocaleString()} vote{c.votes === 1 ? "" : "s"}
-                          {flash.has(c.id) && <span className="ml-1 font-bold text-forest">▲</span>}
+                        <p className="font-display text-4xl leading-none tabular-nums text-ink">{c.percent}%</p>
+                        <p className="mt-1 font-mono text-xs tabular-nums text-ink-soft">
+                          {t(c.votes === 1 ? "results.vote" : "results.votes", { n: num(c.votes) })}
+                          {flash.has(c.id) && <span className="ml-1 text-forest">▲</span>}
                         </p>
                       </div>
                     </div>
-                    <Bar percent={c.percent} color={c.partyColor || "#1f5a39"} thick />
+                    <div className="mt-3">
+                      <Bar percent={c.percent} color={c.partyColor || "#0b5d3b"} thick />
+                    </div>
                   </li>
                 );
               })}
@@ -334,37 +333,38 @@ function ResultsDashboard() {
 
         {/* Side column */}
         <aside className="space-y-6">
-          <section className="glass space-y-4 p-5">
+          <section className="glass space-y-4 p-6">
             <div>
-              <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-forest">
-                <SearchCheck className="size-4" /> Verify My Vote Receipt
+              <p className="eyebrow flex items-center gap-2">
+                <SearchCheck className="size-4 text-forest" /> {t("results.verifyTitle")}
               </p>
-              <p className="mt-1 text-xs text-ink-soft">
-                Enter the receipt code you got after voting to confirm it is sealed in the ledger.
-              </p>
+              <p className="mt-2 text-sm text-ink-soft">{t("results.verifyText")}</p>
             </div>
             <ReceiptVerifier initialCode={receiptParam} compact />
-            <Link href={receiptParam ? `/verify?code=${encodeURIComponent(receiptParam)}` : "/verify"} className="block text-xs text-ink-soft underline hover:text-ink">
-              Open full cryptographic proof →
+            <Link
+              href={receiptParam ? `/verify?code=${encodeURIComponent(receiptParam)}` : "/verify"}
+              className="block text-sm text-ink-soft underline underline-offset-4 hover:text-ink"
+            >
+              {t("results.fullProof")}
             </Link>
           </section>
 
-          <section className="glass space-y-3 p-5">
-            <p className="text-xs font-bold uppercase tracking-widest text-forest">Ballots by county</p>
+          <section className="glass space-y-4 p-6">
+            <p className="eyebrow">{t("results.byCounty")}</p>
             {data?.ballotsByCounty.length ? (
-              <ul className="space-y-2 text-sm">
+              <ul className="space-y-3 text-sm">
                 {data.ballotsByCounty.slice(0, 8).map((c) => (
-                  <li key={c.county} className="space-y-1">
-                    <div className="flex justify-between text-xs">
+                  <li key={c.county} className="space-y-1.5">
+                    <div className="flex justify-between">
                       <span className="text-ink">{c.county}</span>
-                      <span className="tabular-nums text-ink-soft">{c.ballots}</span>
+                      <span className="font-mono tabular-nums text-ink-soft">{num(c.ballots)}</span>
                     </div>
-                    <Bar percent={(c.ballots / Math.max(1, data.election.totalVotesCast)) * 100} color="#1f5a39" />
+                    <Bar percent={(c.ballots / Math.max(1, data.election.totalVotesCast)) * 100} color="#0b5d3b" />
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-ink-faint">No ballots yet.</p>
+              <p className="text-sm text-ink-faint">{t("results.noBallots")}</p>
             )}
           </section>
         </aside>
@@ -375,26 +375,22 @@ function ResultsDashboard() {
   );
 }
 
-function Kpi(props: { label: string; value: string; sub: React.ReactNode; tone?: "good" | "bad"; icon?: React.ReactNode }) {
+function Figure(props: { label: string; value: string; sub: React.ReactNode; tone?: "good" | "bad"; icon?: React.ReactNode }) {
   const bad = props.tone === "bad";
   return (
-    <div
-      className={`glass flex flex-col justify-between gap-1 rounded-2xl p-4 ${
-        bad ? "border-clay/60 bg-clay-soft" : props.tone === "good" ? "border-forest/30 bg-forest-soft" : ""
-      }`}
-    >
-      <span className={`flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide ${bad ? "text-clay" : "text-ink-soft"}`}>
+    <div className={`flex flex-col gap-2 border-line p-5 [&:not(:last-child)]:border-r max-lg:[&:nth-child(2)]:border-r-0 max-lg:[&:nth-child(-n+2)]:border-b ${bad ? "bg-clay-soft" : "bg-surface"}`}>
+      <span className={`flex items-center gap-1.5 font-mono text-[10.5px] uppercase tracking-[0.14em] ${bad ? "text-clay" : props.tone === "good" ? "text-forest" : "text-ink-faint"}`}>
         {props.icon} {props.label}
       </span>
-      <span className={`text-2xl font-bold tabular-nums ${bad ? "text-clay" : "text-ink"}`}>{props.value}</span>
-      <span className="text-[11px] text-ink-soft">{props.sub}</span>
+      <span className={`font-display text-4xl leading-none tabular-nums ${bad ? "text-clay" : "text-ink"}`}>{props.value}</span>
+      <span className="text-xs text-ink-soft">{props.sub}</span>
     </div>
   );
 }
 
 function Bar({ percent, color, thick }: { percent: number; color: string; thick?: boolean }) {
   return (
-    <div className={`w-full overflow-hidden rounded-full bg-paper-2 ${thick ? "h-3" : "mt-1 h-1.5"}`}>
+    <div className={`w-full overflow-hidden rounded-full bg-paper-2 ${thick ? "h-2.5" : "mt-1 h-1.5"}`}>
       <div
         className="h-full rounded-full transition-[width] duration-700 ease-out"
         style={{ width: `${Math.min(100, Math.max(percent > 0 ? 2 : 0, percent))}%`, backgroundColor: color }}
@@ -406,7 +402,7 @@ function Bar({ percent, color, thick }: { percent: number; color: string; thick?
 function Select(props: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <label className="block">
-      <span className="field-label text-[11px]">{props.label}</span>
+      <span className="field-label text-xs">{props.label}</span>
       <select className="field py-2 text-sm" value={props.value} onChange={(e) => props.onChange(e.target.value)}>
         {props.options.map((o) => (
           <option key={o.value} value={o.value}>

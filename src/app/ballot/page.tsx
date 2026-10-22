@@ -3,24 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  CheckCircle2,
-  Copy,
-  ExternalLink,
-  Loader2,
-  Lock,
-  MapPin,
-  Printer,
-  ShieldCheck,
-  Sparkles,
-  Vote,
-} from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CheckCircle2, Copy, ExternalLink, Loader2, Lock, MapPin, Printer, ShieldCheck, Vote } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
 import { useToast } from "@/components/Toast";
-import { POSITION_LABELS, type Position } from "@/lib/positions";
+import { useI18n } from "@/lib/i18n/I18n";
+import type { Position } from "@/lib/positions";
 
 type CandidateOption = {
   id: string;
@@ -50,6 +37,7 @@ type CastResult = {
 export default function BallotPage() {
   const router = useRouter();
   const toast = useToast();
+  const { t, serverText, regionText, locale } = useI18n();
 
   const [loading, setLoading] = useState(true);
   const [voter, setVoter] = useState<{
@@ -69,7 +57,7 @@ export default function BallotPage() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // Load voter session and tailored candidate lists
+  // Load the voter session and the candidates for their region.
   useEffect(() => {
     async function init() {
       try {
@@ -99,6 +87,7 @@ export default function BallotPage() {
 
   const allSeatsChosen = ballots.length > 0 && ballots.every((b) => !!choices[b.position]);
   const currentBallot = ballots[activeSeatIdx];
+  const seat = (p: Position) => t(`positions.${p}`);
 
   async function handleCastBallot() {
     if (!allSeatsChosen) return;
@@ -113,13 +102,13 @@ export default function BallotPage() {
       });
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to cast ballot.");
+      if (!res.ok) throw new Error(data.error ? serverText(data.error) : t("ballot.castFailed"));
 
       setCastResult(data);
-      toast.success("Ballot sealed", `Receipt ${data.receiptCode} · block #${data.seq}`);
+      toast.success(t("ballot.toastSealedTitle"), t("ballot.toastSealedBody", { code: data.receiptCode, seq: data.seq }));
     } catch (err) {
       setError((err as Error).message);
-      toast.error("Ballot not cast", (err as Error).message);
+      toast.error(t("ballot.toastNotCastTitle"), (err as Error).message);
     } finally {
       setSubmitting(false);
     }
@@ -135,97 +124,75 @@ export default function BallotPage() {
     return (
       <main className="mx-auto grid min-h-dvh place-items-center p-6 text-center">
         <div className="space-y-4">
-          <Loader2 className="mx-auto size-12 animate-spin text-forest" />
-          <h2 className="font-display text-xl font-semibold text-ink">Routing Your Regional Ballots…</h2>
-          <p className="text-xs text-ink-soft">Verifying secure voting token and local candidate register</p>
+          <Loader2 className="mx-auto size-10 animate-spin text-forest" />
+          <h2 className="font-display text-3xl text-ink">{t("ballot.loadingTitle")}</h2>
+          <p className="text-sm text-ink-soft">{t("ballot.loadingText")}</p>
         </div>
       </main>
     );
   }
 
-  // --- VOTE CAST CONFIRMATION / ANONYMOUS RECEIPT ---
+  // --- Vote cast: the anonymous receipt ---
   if (castResult) {
     return (
-      <main className="mx-auto min-h-dvh max-w-2xl px-4 py-8 sm:py-12 animate-fade-up">
-        <PageTitle eyebrow="Official Digital Voting Receipt" title="Thank you for voting" />
+      <main className="mx-auto min-h-dvh max-w-2xl px-4 py-12 animate-fade-up">
+        <PageTitle eyebrow={t("ballot.doneEyebrow")} title={t("ballot.doneTitle")} />
 
-        <section className="relative overflow-hidden rounded-2xl border border-line bg-linear-to-b from-surface to-paper p-6 sm:p-8 shadow-sm">
-          <div className="flag-bar -mx-8 -mt-8 mb-6 h-2 w-[calc(100%+4rem)]" aria-hidden />
-
-          {/* IEBC Verified Stamp */}
-          <div className="text-center space-y-3 pb-6 border-b border-line">
-            <span className="mx-auto grid size-20 place-items-center rounded-2xl border-2 border-forest bg-forest-soft text-forest shadow-sm ">
-              <CheckCircle2 className="size-10" />
+        <section className="overflow-hidden rounded-2xl border border-line bg-surface">
+          <div className="flag-bar h-1.5" aria-hidden />
+          <div className="space-y-4 border-b border-line p-7 text-center sm:p-9">
+            <span className="mx-auto grid size-16 place-items-center rounded-full bg-forest text-white">
+              <CheckCircle2 className="size-8" />
             </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-forest/40 bg-forest-soft px-3 py-1 text-xs font-bold text-forest uppercase tracking-wider">
-              <ShieldCheck className="size-4" /> Ballot Sealed in Cryptographic Ledger
-            </span>
-            <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">Vote Successfully Cast!</h1>
-            <p className="text-xs text-ink-soft max-w-md mx-auto">
-              Your 6 constitutional ballots have been committed into the append-only SHA-256 block ledger.
-              Under Article 86 of the Constitution of Kenya, your ballot is completely anonymous.
+            <p className="eyebrow inline-flex items-center gap-2 text-forest">
+              <ShieldCheck className="size-4" /> {t("ballot.sealedBadge")}
             </p>
+            <h2 className="font-display text-4xl text-ink">{t("ballot.doneHeading")}</h2>
+            <p className="mx-auto max-w-md text-[15px] leading-relaxed text-ink-soft">{t("ballot.doneText")}</p>
           </div>
 
-          {/* Cryptographic Receipt Card */}
-          <div className="my-6 space-y-4 rounded-2xl border border-line bg-paper p-5 font-mono text-xs shadow-inner">
-            <div className="flex items-center justify-between border-b border-line pb-3">
-              <span className="text-ink-soft font-sans font-semibold">ANONYMOUS RECEIPT CODE</span>
-              <button
-                onClick={() => copyReceipt(castResult.receiptCode)}
-                className="btn-ghost flex items-center gap-1 py-1 px-2 text-xs text-forest font-sans"
-              >
+          <div className="space-y-5 p-7 sm:p-9">
+            <div className="rounded-xl border border-dashed border-line-strong p-5 text-center">
+              <p className="eyebrow">{t("ballot.receiptCode")}</p>
+              <p className="mt-2 font-mono text-2xl font-medium tracking-[0.12em] text-ink">{castResult.receiptCode}</p>
+              <button onClick={() => copyReceipt(castResult.receiptCode)} className="btn-ghost mt-4 px-4 py-1.5 text-xs">
                 {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                {copied ? "Copied" : "Copy"}
+                {copied ? t("common.copied") : t("common.copy")}
               </button>
             </div>
 
-            <p className="text-center text-xl font-bold tracking-widest text-ink py-1">
-              {castResult.receiptCode}
-            </p>
-
-            <div className="grid grid-cols-2 gap-3 pt-2 text-[11px] text-ink-soft border-t border-line">
+            <dl className="grid grid-cols-3 gap-4 font-mono text-xs">
               <div>
-                <span className="block text-ink-faint">BLOCK SEQUENCE</span>
-                <span className="font-semibold text-ink">#{castResult.seq}</span>
+                <dt className="text-ink-faint">{t("ballot.block")}</dt>
+                <dd className="mt-1 font-medium text-ink">#{castResult.seq}</dd>
               </div>
               <div>
-                <span className="block text-ink-faint">TIMESTAMP</span>
-                <span className="font-semibold text-ink">{new Date(castResult.timestamp).toLocaleTimeString()}</span>
+                <dt className="text-ink-faint">{t("ballot.time")}</dt>
+                <dd className="mt-1 font-medium text-ink">{new Date(castResult.timestamp).toLocaleTimeString(locale)}</dd>
               </div>
-              <div className="col-span-2 overflow-hidden">
-                <span className="block text-ink-faint">PREVIOUS BLOCK HASH (CHAIN LINK)</span>
-                <span className="block truncate text-[10px] text-ink-soft">{castResult.previousHash}</span>
+              <div>
+                <dt className="text-ink-faint">{t("ballot.county")}</dt>
+                <dd className="mt-1 truncate font-medium text-ink">{castResult.county}</dd>
               </div>
-              <div className="col-span-2 overflow-hidden">
-                <span className="block text-ink-faint">BLOCK SHA-256 HASH</span>
-                <span className="truncate block text-[10px] text-forest">{castResult.currentHash}</span>
+              <div className="col-span-3 overflow-hidden">
+                <dt className="text-ink-faint">{t("ballot.prevHash")}</dt>
+                <dd className="mt-1 truncate text-ink-soft">{castResult.previousHash}</dd>
               </div>
-            </div>
-          </div>
+              <div className="col-span-3 overflow-hidden">
+                <dt className="text-ink-faint">{t("ballot.thisHash")}</dt>
+                <dd className="mt-1 truncate text-forest">{castResult.currentHash}</dd>
+              </div>
+            </dl>
 
-          {/* Action Links */}
-          <div className="space-y-3">
-            <Link
-              href={`/results?receipt=${encodeURIComponent(castResult.receiptCode)}`}
-              className="btn-primary w-full py-3.5 flex items-center justify-center gap-2"
-            >
-              <Sparkles className="size-4" /> Verify My Vote on Public Ledger
+            <Link href={`/verify?code=${encodeURIComponent(castResult.receiptCode)}`} className="btn-primary w-full py-4">
+              <ShieldCheck className="size-4" /> {t("ballot.verifyCta")}
             </Link>
-
             <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => window.print()}
-                className="btn-ghost w-full py-3 flex items-center justify-center gap-2 text-xs"
-              >
-                <Printer className="size-4" /> Print / Save
+              <button onClick={() => window.print()} className="btn-ghost w-full text-sm">
+                <Printer className="size-4" /> {t("common.print")}
               </button>
-
-              <Link
-                href="/results"
-                className="btn-ghost w-full py-3 flex items-center justify-center gap-2 text-xs text-forest"
-              >
-                <ExternalLink className="size-4" /> Live Results
+              <Link href="/results" className="btn-ghost w-full text-sm">
+                <ExternalLink className="size-4" /> {t("ballot.liveResults")}
               </Link>
             </div>
           </div>
@@ -234,256 +201,193 @@ export default function BallotPage() {
     );
   }
 
-  // --- BALLOT REVIEW SCREEN ---
+  // --- Review ---
   if (reviewMode) {
     return (
-      <main className="mx-auto min-h-dvh max-w-3xl px-4 py-8 sm:py-12 animate-fade-up">
-        <PageTitle eyebrow="Ballot Confirmation Review" title="Review your 6 choices">
-          <button onClick={() => setReviewMode(false)} className="btn-ghost text-xs">
-            <ArrowLeft className="size-4" /> Edit Choices
+      <main className="mx-auto min-h-dvh max-w-3xl px-4 py-12 animate-fade-up">
+        <PageTitle eyebrow={t("ballot.reviewEyebrow")} title={t("ballot.reviewTitle")} lead={t("ballot.reviewLead")}>
+          <button onClick={() => setReviewMode(false)} className="btn-ghost text-sm">
+            <ArrowLeft className="size-4" /> {t("ballot.edit")}
           </button>
         </PageTitle>
 
-        <section className="glass p-6 sm:p-8 space-y-6 shadow-sm">
-          <div className="flag-bar -mx-8 -mt-8 mb-6 h-2 w-[calc(100%+4rem)]" aria-hidden />
-
-          <div>
-            <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">Review Your 6 Ballots</h1>
-            <p className="mt-1 text-xs text-ink-soft">
-              Please inspect your candidate selections across all six electoral positions before finalizing.
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            {ballots.map((b) => {
-              const selectedCandidate = b.candidates.find((c) => c.id === choices[b.position]);
-              return (
-                <div
-                  key={b.position}
-                  className="flex items-center justify-between rounded-2xl border border-line bg-paper p-4"
+        <ol className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
+          {ballots.map((b, i) => {
+            const selected = b.candidates.find((c) => c.id === choices[b.position]);
+            return (
+              <li key={b.position}>
+                <button
+                  onClick={() => {
+                    setActiveSeatIdx(i);
+                    setReviewMode(false);
+                  }}
+                  className="flex w-full items-center gap-5 p-5 text-left transition hover:bg-paper"
                 >
-                  <div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-forest">
-                      {b.title} · {b.regionLabel}
+                  <span className="font-display text-3xl leading-none text-line-strong">{String(i + 1).padStart(2, "0")}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="eyebrow block">
+                      {seat(b.position)} · {regionText(b.regionLabel)}
                     </span>
-                    <h3 className="text-base font-bold text-ink mt-0.5">
-                      {selectedCandidate?.name ?? "No candidate selected"}
-                    </h3>
-                    <p className="text-xs text-ink-soft">{selectedCandidate?.party}</p>
-                  </div>
-                  <span
-                    className="size-4 rounded-full"
-                    style={{ backgroundColor: selectedCandidate?.partyColor ?? "#64748b" }}
-                    title={selectedCandidate?.party}
-                  />
-                </div>
-              );
-            })}
-          </div>
+                    <span className="mt-1 block truncate text-lg font-semibold text-ink">{selected?.name ?? t("ballot.noneSelected")}</span>
+                    <span className="flex items-center gap-2 text-sm text-ink-soft">
+                      <span className="size-2.5 rounded-full" style={{ backgroundColor: selected?.partyColor ?? "#85897d" }} />
+                      {selected?.party}
+                    </span>
+                  </span>
+                  <ArrowRight className="size-4 shrink-0 text-ink-faint" aria-hidden />
+                </button>
+              </li>
+            );
+          })}
+        </ol>
 
-          {error && (
-            <div className="rounded-xl border border-clay/40 bg-clay-soft p-3 text-xs text-clay">
-              {error}
-            </div>
-          )}
+        {error && <p className="mt-5 rounded-xl border border-clay/40 bg-clay-soft p-3.5 text-sm text-clay">{error}</p>}
 
-          <div className="rounded-2xl border border-ochre/40 bg-ochre-soft p-4 text-xs text-ochre-deep flex items-start gap-3">
-            <Lock className="size-5 shrink-0 text-ochre-deep mt-0.5" />
-            <div>
-              <p className="font-bold text-ochre-deep">Irrevocable Single-Vote Commitment</p>
-              <p className="mt-0.5">
-                Once you click &quot;Cast Secret Ballot&quot;, your single vote is locked atomically in MongoDB and
-                recorded in the SHA-256 hash chain. Your name and ID are never stored with the ballot. You will not
-                be able to vote again.
-              </p>
-            </div>
+        <div className="mt-5 flex items-start gap-3 rounded-2xl border border-ochre/40 bg-ochre-soft p-5 text-sm text-ochre-deep">
+          <Lock className="mt-0.5 size-5 shrink-0" />
+          <div>
+            <p className="font-semibold">{t("ballot.commitTitle")}</p>
+            <p className="mt-1 leading-relaxed">{t("ballot.commitText")}</p>
           </div>
+        </div>
 
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
-            <button
-              onClick={() => setReviewMode(false)}
-              disabled={submitting}
-              className="btn-ghost sm:w-1/3"
-            >
-              Back to Ballots
-            </button>
-            <button
-              id="confirm-cast-btn"
-              onClick={handleCastBallot}
-              disabled={submitting}
-              className="btn-primary flex-1 py-3.5 text-base"
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="size-5 animate-spin" /> Chaining Ballot to Ledger…
-                </>
-              ) : (
-                <>
-                  <Vote className="size-5" /> Cast Secret Ballot Now
-                </>
-              )}
-            </button>
-          </div>
-        </section>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <button onClick={() => setReviewMode(false)} disabled={submitting} className="btn-ghost sm:w-1/3">
+            {t("ballot.backToBallot")}
+          </button>
+          <button id="confirm-cast-btn" onClick={handleCastBallot} disabled={submitting} className="btn-primary flex-1 py-4 text-base">
+            {submitting ? (
+              <>
+                <Loader2 className="size-5 animate-spin" /> {t("ballot.casting")}
+              </>
+            ) : (
+              <>
+                <Vote className="size-5" /> {t("ballot.cast")}
+              </>
+            )}
+          </button>
+        </div>
       </main>
     );
   }
 
-  // --- MAIN BALLOT INTERFACE (6 SEATS) ---
+  // --- The ballot: six seats ---
   return (
-    <main className="mx-auto min-h-dvh max-w-4xl px-4 py-8 sm:py-12">
-      <PageTitle eyebrow="Official Digital Ballot · General Election 2027" title={voter ? `Karibu, ${voter.fullName.split(" ")[0]}` : "Your ballot"} />
+    <main className="mx-auto min-h-dvh max-w-4xl px-4 py-12">
+      <PageTitle
+        eyebrow={t("ballot.eyebrow")}
+        title={voter ? t("ballot.greeting", { name: voter.fullName.split(" ")[0] }) : t("ballot.yourBallot")}
+      />
 
       {voter && (
-        <div className="mb-6 flex items-start gap-3 rounded-2xl border border-forest/30 bg-forest-soft p-4 text-sm">
+        <div className="mb-8 flex items-start gap-3 border-l-2 border-forest pl-4">
           <MapPin className="mt-0.5 size-5 shrink-0 text-forest" aria-hidden />
           <div>
             <p className="font-semibold text-ink">
-              Ballot routed to your registered region: {voter.wardName} Ward · {voter.constituencyName} Constituency ·{" "}
-              {voter.countyName} County
+              {t("ballot.routed", {
+                ward: t("region.ward", { name: voter.wardName }),
+                constituency: t("region.constituency", { name: voter.constituencyName }),
+                county: t("region.county", { name: voter.countyName }),
+              })}
             </p>
-            <p className="mt-0.5 text-xs text-ink-soft">
-              Your county, constituency and ward races load automatically alongside the national Presidential race, so
-              you can vote from anywhere without travelling back to your registration centre.
-            </p>
+            <p className="mt-1 text-sm leading-relaxed text-ink-soft">{t("ballot.routedText")}</p>
           </div>
         </div>
       )}
 
       {error && !reviewMode && (
-        <p role="alert" className="mb-6 rounded-xl border border-clay/40 bg-clay-soft p-3 text-sm text-clay">
-          {error}
+        <p role="alert" className="mb-6 rounded-xl border border-clay/40 bg-clay-soft p-3.5 text-sm text-clay">
+          {serverText(error)}
         </p>
       )}
 
-      {/* Seat Selection Tab Bar */}
-      <nav className="mb-6" aria-label="Electoral seats">
-        <div className="flex flex-wrap gap-2">
+      {/* Seat rail */}
+      <nav className="mb-6" aria-label={t("ballot.seats")}>
+        <ol className="grid grid-cols-3 gap-2 sm:grid-cols-6">
           {ballots.map((b, idx) => {
-            const hasChosen = !!choices[b.position];
-            const isActive = activeSeatIdx === idx;
+            const chosen = !!choices[b.position];
+            const active = activeSeatIdx === idx;
             return (
-              <button
-                key={b.position}
-                onClick={() => setActiveSeatIdx(idx)}
-                className={`flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-xs font-semibold transition border ${
-                  isActive
-                    ? "border-forest bg-forest text-white font-bold shadow-lg"
-                    : hasChosen
-                      ? "border-forest/30 bg-forest-soft text-forest"
-                      : "border-line bg-paper text-ink-soft hover:text-ink"
-                }`}
-              >
-                <span>{POSITION_LABELS[b.position]}</span>
-                {hasChosen && (
-                  <span
-                    className={`grid size-4 place-items-center rounded-full ${
-                      isActive ? "bg-paper text-forest" : "bg-forest text-white"
-                    }`}
-                  >
-                    <Check className="size-2.5" />
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </nav>
-
-      {/* Active Ballot Section */}
-      {currentBallot && (
-        <section className="glass relative overflow-hidden p-6 sm:p-8 shadow-sm space-y-6">
-          <div className="flag-bar -mx-8 -mt-8 mb-6 h-2 w-[calc(100%+4rem)]" aria-hidden />
-
-          {/* Seat Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-line pb-4">
-            <div>
-              <span className="text-xs font-bold tracking-widest uppercase text-forest">
-                SEAT {activeSeatIdx + 1} OF 6 · {currentBallot.regionLabel}
-              </span>
-              <h2 className="font-display text-2xl font-semibold text-ink mt-0.5">{currentBallot.title}</h2>
-            </div>
-            <span className="text-xs text-ink-soft">
-              Select one candidate to cast your vote
-            </span>
-          </div>
-
-          {/* Candidate Grid */}
-          <div className="grid gap-4 sm:grid-cols-2">
-            {currentBallot.candidates.map((cand) => {
-              const isSelected = choices[currentBallot.position] === cand.id;
-              return (
+              <li key={b.position}>
                 <button
-                  key={cand.id}
-                  type="button"
-                  onClick={() => handleSelectCandidate(currentBallot.position, cand.id)}
-                  className={`group relative flex items-start gap-4 rounded-2xl border p-5 text-left transition ${
-                    isSelected
-                      ? "border-forest bg-forest-soft shadow-sm  ring-2 ring-forest/50"
-                      : "border-line bg-paper hover:border-line hover:bg-paper-2"
+                  onClick={() => setActiveSeatIdx(idx)}
+                  aria-current={active ? "step" : undefined}
+                  className={`flex h-full w-full flex-col items-start gap-1.5 rounded-xl border p-3 text-left transition ${
+                    active ? "border-ink bg-ink text-paper" : chosen ? "border-forest/40 bg-forest-soft text-forest" : "border-line text-ink-soft hover:border-ink-faint"
                   }`}
                 >
-                  {/* Party Color indicator stripe */}
-                  <span
-                    className="absolute left-0 inset-y-3 w-1.5 rounded-r"
-                    style={{ backgroundColor: cand.partyColor }}
-                  />
+                  <span className="flex w-full items-center justify-between font-mono text-[10px]">
+                    {String(idx + 1).padStart(2, "0")}
+                    {chosen && <Check className="size-3.5" />}
+                  </span>
+                  <span className="text-xs font-semibold leading-tight">{seat(b.position)}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
 
-                  {/* Radio Indicator */}
-                  <span
-                    className={`grid size-6 shrink-0 place-items-center rounded-full border transition mt-0.5 ${
-                      isSelected
-                        ? "border-forest bg-forest text-white"
-                        : "border-line bg-paper group-hover:border-line"
+      {currentBallot && (
+        <section className="glass overflow-hidden">
+          <div className="flag-bar h-1" aria-hidden />
+          <div className="space-y-7 p-6 sm:p-9">
+            <div className="flex flex-col gap-2 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="eyebrow">{t("ballot.seatOf", { n: activeSeatIdx + 1, region: regionText(currentBallot.regionLabel) })}</p>
+                <h2 className="mt-2 font-display text-4xl text-ink">{seat(currentBallot.position)}</h2>
+              </div>
+              <span className="text-sm text-ink-soft">{t("ballot.selectOne")}</span>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label={seat(currentBallot.position)}>
+              {currentBallot.candidates.map((cand) => {
+                const selected = choices[currentBallot.position] === cand.id;
+                return (
+                  <button
+                    key={cand.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => handleSelectCandidate(currentBallot.position, cand.id)}
+                    className={`group relative flex items-center gap-4 overflow-hidden rounded-xl border p-5 text-left transition ${
+                      selected ? "border-ink bg-surface ring-1 ring-ink" : "border-line bg-paper hover:border-ink-faint"
                     }`}
                   >
-                    {isSelected && <Check className="size-3.5" />}
-                  </span>
+                    <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: cand.partyColor }} />
+                    <span
+                      className={`grid size-7 shrink-0 place-items-center rounded-full border-2 transition ${
+                        selected ? "border-forest bg-forest text-white" : "border-line-strong"
+                      }`}
+                    >
+                      {selected && <Check className="size-4" />}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-lg font-semibold text-ink">{cand.name}</span>
+                      <span className="mt-0.5 flex items-center gap-2 text-sm text-ink-soft">
+                        <span className="size-2.5 rounded-full" style={{ backgroundColor: cand.partyColor }} />
+                        {cand.party}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
 
-                  <div className="flex-1">
-                    <h3 className="text-base font-bold text-ink group-hover:text-forest transition">
-                      {cand.name}
-                    </h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span
-                        className="size-2.5 rounded-full"
-                        style={{ backgroundColor: cand.partyColor }}
-                      />
-                      <span className="text-xs text-ink-soft font-medium">{cand.party}</span>
-                    </div>
-                  </div>
+            <div className="flex items-center justify-between border-t border-line pt-6">
+              <button onClick={() => setActiveSeatIdx((i) => Math.max(0, i - 1))} disabled={activeSeatIdx === 0} className="btn-ghost">
+                <ArrowLeft className="size-4" /> <span className="hidden sm:inline">{t("ballot.previous")}</span>
+              </button>
+              {activeSeatIdx < ballots.length - 1 ? (
+                <button onClick={() => setActiveSeatIdx((i) => Math.min(ballots.length - 1, i + 1))} className="btn-ink">
+                  {t("ballot.nextSeat")} <ArrowRight className="size-4" />
                 </button>
-              );
-            })}
-          </div>
-
-          {/* Stepper Navigation Controls */}
-          <div className="flex items-center justify-between border-t border-line pt-6">
-            <button
-              onClick={() => setActiveSeatIdx((i) => Math.max(0, i - 1))}
-              disabled={activeSeatIdx === 0}
-              className="btn-ghost"
-            >
-              <ArrowLeft className="size-4" /> Previous Seat
-            </button>
-
-            {activeSeatIdx < ballots.length - 1 ? (
-              <button
-                onClick={() => setActiveSeatIdx((i) => Math.min(ballots.length - 1, i + 1))}
-                className="btn-primary"
-              >
-                Next Seat <ArrowRight className="size-4" />
-              </button>
-            ) : (
-              <button
-                id="review-ballots-btn"
-                onClick={() => setReviewMode(true)}
-                disabled={!allSeatsChosen}
-                className="btn-primary px-6"
-              >
-                Review All 6 Ballots <CheckCircle2 className="size-4" />
-              </button>
-            )}
+              ) : (
+                <button id="review-ballots-btn" onClick={() => setReviewMode(true)} disabled={!allSeatsChosen} className="btn-primary px-6">
+                  {t("ballot.review")} <CheckCircle2 className="size-4" />
+                </button>
+              )}
+            </div>
           </div>
         </section>
       )}

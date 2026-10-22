@@ -4,45 +4,51 @@
 @source not "../../explainer-video";
 
 /* ---------------------------------------------------------------------------
-   E-ELECTIONS design tokens: a natural Kenyan civic palette.
-   Warm ivory paper, deep forest green, clay red, ochre and charcoal ink.
-   The colours are taken from the land and the flag, not from neon screens.
+   E-ELECTIONS · "Uwazi" (openness) design system.
+   Civic editorial: the calm of a well-set national newspaper or passport page.
+   Stone-white paper, near-black ink, the flag's green for "go" and its red
+   only as a signal. Flat surfaces, hairline rules, big serif headlines,
+   a crisp news grotesk for everything else. No gradients, no glow.
 --------------------------------------------------------------------------- */
 @theme {
-  --font-sans: var(--font-public-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-sans: var(--font-schibsted), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-instrument), ui-serif, Georgia, serif;
   --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 
-  /* Surfaces */
-  --color-paper: #f4efe4;
-  --color-paper-2: #ebe4d4;
-  --color-surface: #fffcf6;
-  --color-line: #e0d7c5;
-  --color-line-strong: #c9bca4;
+  /* Paper and surfaces */
+  --color-paper: #f3f1ea;
+  --color-paper-2: #e9e5da;
+  --color-surface: #fbfaf6;
+  --color-line: #dcd7ca;
+  --color-line-strong: #c2bba9;
 
   /* Ink */
-  --color-ink: #1f2219;
-  --color-ink-soft: #565b4c;
-  --color-ink-faint: #8b8d7e;
+  --color-ink: #13150f;
+  --color-ink-soft: #4a4e44;
+  --color-ink-faint: #85897d;
 
-  /* Forest green (primary) */
-  --color-forest: #1f5a39;
-  --color-forest-deep: #143d26;
-  --color-forest-soft: #e2ece1;
-  --color-leaf: #4c8a5c;
+  /* Night (dark bands) */
+  --color-night: #0f1411;
+  --color-night-2: #19201b;
 
-  /* Clay red (alerts) */
-  --color-clay: #a83e2a;
-  --color-clay-deep: #84301f;
-  --color-clay-soft: #f5e2da;
+  /* Kenyan green (primary, "verified", "go") */
+  --color-forest: #0b5d3b;
+  --color-forest-deep: #073f28;
+  --color-forest-soft: #e0ede4;
+  --color-leaf: #3f8b5f;
 
-  /* Ochre (warnings, highlights) */
-  --color-ochre: #b98a2e;
-  --color-ochre-deep: #7a5716;
-  --color-ochre-soft: #f3e8cf;
+  /* Flag red (alerts, tamper) */
+  --color-clay: #b4261c;
+  --color-clay-deep: #8b1b13;
+  --color-clay-soft: #f6e0dc;
+
+  /* Ochre (highlights, warnings) */
+  --color-ochre: #bf891d;
+  --color-ochre-deep: #7b5610;
+  --color-ochre-soft: #f4e9cf;
 
   --animate-scan: scan 2.4s ease-in-out infinite;
-  --animate-fade-up: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-fade-up: fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-pulse-ring: pulse-ring 2.2s ease-out infinite;
 
   @keyframes scan {
@@ -50,12 +56,12 @@
     50% { top: calc(100% - 4px); opacity: 1; }
   }
   @keyframes fade-up {
-    from { opacity: 0; transform: translateY(10px); }
+    from { opacity: 0; transform: translateY(14px); }
     to { opacity: 1; transform: translateY(0); }
   }
   @keyframes pulse-ring {
-    0% { box-shadow: 0 0 0 0 rgb(31 90 57 / 0.35); }
-    100% { box-shadow: 0 0 0 16px rgb(31 90 57 / 0); }
+    0% { box-shadow: 0 0 0 0 rgb(11 93 59 / 0.35); }
+    100% { box-shadow: 0 0 0 16px rgb(11 93 59 / 0); }
   }
 }
 
@@ -64,28 +70,50 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Swahili readers: the page stays hidden for the instant it takes to switch language
+   (set by an inline script in the layout, cleared by the language provider). */
+html.lang-pending body {
+  visibility: hidden;
+}
+
 body {
   min-height: 100dvh;
   color: var(--color-ink);
   background-color: var(--color-paper);
-  /* Faint paper grain so large areas feel like printed stock, not flat UI. */
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.3 0 0 0 0 0.2 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "cv11";
 }
 
 h1, h2, h3 {
   text-wrap: balance;
 }
-
-::selection {
-  background: var(--color-forest-soft);
-  color: var(--color-forest-deep);
+p {
+  text-wrap: pretty;
 }
 
-/* ---- Reusable component utilities (Tailwind v4 @utility) ---------------- */
+/* The display serif has one weight: never fake a bold. */
+.font-display {
+  font-weight: 400 !important;
+  font-synthesis: none;
+  letter-spacing: -0.01em;
+}
+
+::selection {
+  background: var(--color-ink);
+  color: var(--color-paper);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-forest);
+  outline-offset: 2px;
+}
+
+/* ---- Components (Tailwind v4 @utility) ----------------------------------- */
+
+/* A flat sheet of paper on the page. */
 @utility glass {
-  @apply rounded-2xl border border-line bg-surface shadow-[0_1px_0_rgb(255_255_255/0.8)_inset,0_1px_2px_rgb(31_34_25/0.05),0_12px_32px_-18px_rgb(31_34_25/0.25)];
+  @apply rounded-2xl border border-line bg-surface shadow-[0_1px_2px_rgb(19_21_15/0.04)];
 }
 @utility card {
   @apply rounded-xl border border-line bg-surface p-5;
@@ -94,39 +122,67 @@ h1, h2, h3 {
   @apply mb-1.5 block text-sm font-semibold text-ink;
 }
 @utility field {
-  @apply w-full rounded-lg border border-line-strong bg-white px-4 py-3 text-base text-ink
+  @apply w-full rounded-xl border border-line-strong bg-white px-4 py-3 text-base text-ink
     placeholder:text-ink-faint outline-none transition
-    focus:border-forest focus:ring-4 focus:ring-forest/15
+    focus:border-ink focus:ring-4 focus:ring-ink/10
     disabled:cursor-not-allowed disabled:bg-paper disabled:opacity-60;
 }
 @utility btn {
-  @apply inline-flex items-center justify-center gap-2 rounded-lg px-5 py-3 font-semibold transition
+  @apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-3 text-[15px] font-semibold tracking-[-0.005em] transition
     focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-forest/25
-    active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 disabled:active:translate-y-0;
+    active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100;
 }
 @utility btn-primary {
-  @apply btn bg-forest text-white shadow-[0_1px_0_rgb(255_255_255/0.15)_inset,0_2px_6px_-2px_rgb(20_61_38/0.45)]
-    hover:bg-forest-deep;
+  @apply btn bg-forest text-white hover:bg-forest-deep;
+}
+@utility btn-ink {
+  @apply btn bg-ink text-paper hover:bg-night-2;
 }
 @utility btn-ghost {
-  @apply btn border border-line-strong bg-surface text-ink hover:border-ink-faint hover:bg-paper;
+  @apply btn border border-line-strong bg-transparent text-ink hover:border-ink hover:bg-surface;
 }
 @utility btn-danger {
-  @apply btn bg-clay text-white shadow-[0_2px_6px_-2px_rgb(132_48_31/0.45)] hover:bg-clay-deep;
+  @apply btn bg-clay text-white hover:bg-clay-deep;
 }
+/* Small label above a heading: monospaced, like a section mark in a printed report. */
 @utility eyebrow {
-  @apply text-[11px] font-bold uppercase tracking-[0.18em] text-forest;
+  @apply font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-ink-soft;
 }
+@utility rule {
+  @apply h-px w-full bg-line;
+}
+
 /* Kenyan flag: black, white fimbriation, red, white fimbriation, green. */
 @utility flag-bar {
   background: linear-gradient(
     90deg,
-    #1f2219 0 31%,
-    #fffcf6 31% 34.5%,
-    #a83e2a 34.5% 65.5%,
-    #fffcf6 65.5% 69%,
-    #1f5a39 69% 100%
+    #13150f 0 31%,
+    #fbfaf6 31% 34.5%,
+    #b4261c 34.5% 65.5%,
+    #fbfaf6 65.5% 69%,
+    #0b5d3b 69% 100%
   );
+}
+
+/* Woven kikoi stripe, used as a quiet textile accent between sections. */
+@utility kikoi {
+  background: repeating-linear-gradient(
+    90deg,
+    #0b5d3b 0 14px,
+    #f3f1ea 14px 16px,
+    #bf891d 16px 22px,
+    #f3f1ea 22px 24px,
+    #b4261c 24px 30px,
+    #f3f1ea 30px 32px,
+    #13150f 32px 36px,
+    #f3f1ea 36px 38px
+  );
+}
+/* Perforated tear-off edge for the paper receipt illustration. */
+@utility perforated {
+  background-image: radial-gradient(circle at 8px 0, transparent 6px, var(--color-surface) 6.5px);
+  background-size: 16px 12px;
+  background-repeat: repeat-x;
 }
 
 @media print {
@@ -139,25 +195,4 @@ h1, h2, h3 {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* Woven kikoi stripe, used as a quiet textile accent between sections. */
-@utility kikoi {
-  background: repeating-linear-gradient(
-    90deg,
-    #1f5a39 0 14px,
-    #f4efe4 14px 16px,
-    #b98a2e 16px 22px,
-    #f4efe4 22px 24px,
-    #a83e2a 24px 30px,
-    #f4efe4 30px 32px,
-    #1f2219 32px 36px,
-    #f4efe4 36px 38px
-  );
-}
-/* Perforated tear-off edge for the paper receipt illustration. */
-@utility perforated {
-  background-image: radial-gradient(circle at 8px 0, transparent 6px, var(--color-surface) 6.5px);
-  background-size: 16px 12px;
-  background-repeat: repeat-x;
 }

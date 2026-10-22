@@ -1,11 +1,13 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, JetBrains_Mono, Public_Sans } from "next/font/google";
+import { Instrument_Serif, JetBrains_Mono, Schibsted_Grotesk } from "next/font/google";
 import { SiteNav } from "@/components/SiteNav";
+import { SiteFooter } from "@/components/SiteFooter";
 import { ToastProvider } from "@/components/Toast";
+import { I18nProvider, LANG_BOOT_SCRIPT } from "@/lib/i18n/I18n";
 import "./globals.css";
 
-const publicSans = Public_Sans({ subsets: ["latin"], variable: "--font-public-sans" });
-const fraunces = Fraunces({ subsets: ["latin"], variable: "--font-fraunces", axes: ["opsz", "SOFT"] });
+const schibsted = Schibsted_Grotesk({ subsets: ["latin"], variable: "--font-schibsted" });
+const instrument = Instrument_Serif({ subsets: ["latin"], weight: "400", style: ["normal", "italic"], variable: "--font-instrument" });
 const jetbrains = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
 
 export const metadata: Metadata = {
@@ -14,32 +16,35 @@ export const metadata: Metadata = {
     template: "%s | E-ELECTIONS",
   },
   description:
-    "Secure biometric digital voting for Kenya: vote from anywhere, instant tallying and a tamper-proof SHA-256 vote ledger. KSEF / YSK 2027.",
+    "Secure biometric digital voting for Kenya: vote from anywhere, instant tallying and a tamper-proof SHA-256 vote ledger. In English and Kiswahili. KSEF / YSK 2027.",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f4efe4",
+  themeColor: "#f3f1ea",
   width: "device-width",
   initialScale: 1,
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" data-scroll-behavior="smooth" className={`${publicSans.variable} ${fraunces.variable} ${jetbrains.variable}`}>
+    <html
+      lang="en"
+      data-scroll-behavior="smooth"
+      className={`${schibsted.variable} ${instrument.variable} ${jetbrains.variable}`}
+      suppressHydrationWarning
+    >
+      <head>
+        {/* Kiswahili readers: hide the page for the instant it takes to switch language. */}
+        <script dangerouslySetInnerHTML={{ __html: LANG_BOOT_SCRIPT }} />
+      </head>
       <body className="font-sans">
-        <ToastProvider>
-          <SiteNav />
-          {children}
-          <footer className="mt-16 border-t border-line bg-paper-2/60 print:hidden">
-            <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-ink-faint sm:flex-row sm:items-center sm:justify-between">
-              <p>
-                <span className="font-display text-sm font-semibold text-ink-soft">E-Elections Kenya</span> · Kenya Science
-                &amp; Engineering Fair 2027 · Young Scientists Kenya 2027
-              </p>
-              <p>Demonstration system · all candidates are fictional</p>
-            </div>
-          </footer>
-        </ToastProvider>
+        <I18nProvider>
+          <ToastProvider>
+            <SiteNav />
+            {children}
+            <SiteFooter />
+          </ToastProvider>
+        </I18nProvider>
       </body>
     </html>
   );

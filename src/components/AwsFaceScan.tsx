@@ -4,10 +4,11 @@ import dynamic from "next/dynamic";
 import { useRef, useState } from "react";
 import { Camera, Loader2, RotateCcw } from "lucide-react";
 import type { AwsCredentials } from "@aws-amplify/ui-react-liveness";
+import { useI18n } from "@/lib/i18n/I18n";
 
 const AwsLivenessView = dynamic(() => import("@/components/AwsLivenessView"), {
   ssr: false,
-  loading: () => <Note busy text="Opening the camera…" />,
+  loading: () => <LoadingNote />,
 });
 
 /** What /api/face/aws-session returns. */
@@ -38,6 +39,7 @@ type Phase =
  * person and our server then matches the face against the register.
  */
 export function AwsFaceScan({ startSession, onComplete, actionLabel }: Props) {
+  const { t, serverText } = useI18n();
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const startedAt = useRef(0);
 
@@ -58,7 +60,7 @@ export function AwsFaceScan({ startSession, onComplete, actionLabel }: Props) {
         },
       });
     } catch (err) {
-      setPhase({ kind: "error", msg: (err as Error).message });
+      setPhase({ kind: "error", msg: serverText((err as Error).message) });
     }
   }
 
@@ -82,8 +84,8 @@ export function AwsFaceScan({ startSession, onComplete, actionLabel }: Props) {
             setPhase({
               kind: "error",
               msg: /permission|NotAllowed/i.test(msg)
-                ? "Camera permission denied. Allow camera access (padlock icon in the address bar) and try again."
-                : `The face scan stopped: ${msg}`,
+                ? t("faceScan.cameraDenied")
+                : t("faceScan.aws.stopped", { msg }),
             })
           }
         />
@@ -94,28 +96,30 @@ export function AwsFaceScan({ startSession, onComplete, actionLabel }: Props) {
   return (
     <div className="space-y-3 rounded-2xl border border-line bg-paper-2/60 p-5 text-center">
       {phase.kind === "done" ? (
-        <Note text={`Scan complete in ${phase.seconds} s. Checking the register…`} busy />
+        <Note text={t("faceScan.aws.complete", { s: phase.seconds })} busy />
       ) : phase.kind === "starting" ? (
-        <Note busy text="Starting a secure face scan…" />
+        <Note busy text={t("faceScan.aws.starting")} />
       ) : (
         <>
           {phase.kind === "error" && <p className="text-sm text-red-800">{phase.msg}</p>}
-          <p className="text-sm text-ink-soft">
-            Look at the camera, fit your face in the oval and hold still for a few seconds. The screen may flash colours:
-            that is the check for a live person.
-          </p>
+          <p className="text-sm text-ink-soft">{t("faceScan.aws.intro")}</p>
           <button
             type="button"
             onClick={start}
             className="inline-flex items-center gap-2 rounded-xl bg-forest px-5 py-2.5 text-sm font-semibold text-paper hover:bg-forest-deep"
           >
             {phase.kind === "error" ? <RotateCcw className="size-4" aria-hidden /> : <Camera className="size-4" aria-hidden />}
-            {phase.kind === "error" ? "Try again" : actionLabel}
+            {phase.kind === "error" ? t("common.tryAgain") : actionLabel}
           </button>
         </>
       )}
     </div>
   );
+}
+
+function LoadingNote() {
+  const { t } = useI18n();
+  return <Note busy text={t("faceScan.opening")} />;
 }
 
 function Note({ text, busy }: { text: string; busy?: boolean }) {

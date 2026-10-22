@@ -22,6 +22,7 @@ import { PageTitle } from "@/components/Brand";
 import { FaceScan, preloadFaceScan, type Challenge, type FaceScanPayload } from "@/components/FaceScan";
 import { AwsFaceScan, type AwsSession } from "@/components/AwsFaceScan";
 import { useToast } from "@/components/Toast";
+import { useI18n } from "@/lib/i18n/I18n";
 
 type VoterProfile = {
   idNumber: string;
@@ -50,6 +51,7 @@ async function postJSON<T = Record<string, unknown>>(url: string, body: unknown)
 export default function VoterLoginPage() {
   const router = useRouter();
   const toast = useToast();
+  const { t, list, serverText } = useI18n();
 
   const [idNumber, setIdNumber] = useState("");
   const [voter, setVoter] = useState<VoterProfile | null>(null);
@@ -75,7 +77,7 @@ export default function VoterLoginPage() {
   // ---- Stage 1: National ID check (double-voting lockout) -------------------
   async function handleLookup(e: React.FormEvent) {
     e.preventDefault();
-    if (!/^\d{7,8}$/.test(idNumber)) return setError("National ID must be 7 or 8 digits.");
+    if (!/^\d{7,8}$/.test(idNumber)) return setError(t("login.idInvalid"));
 
     setBusy(true);
     setError("");
@@ -85,15 +87,15 @@ export default function VoterLoginPage() {
         idNumber,
       });
       if (data.hasVoted) {
-        setDenied(data.error ?? "ACCESS DENIED: this National ID has already voted.");
-        toast.error("Double vote blocked", `National ID ${idNumber} has already voted.`);
+        setDenied(data.error ? serverText(data.error) : t("login.alreadyVoted"));
+        toast.error(t("login.toastDoubleTitle"), t("login.toastDoubleBody", { id: idNumber }));
         return;
       }
-      if (!ok) throw new Error(data.error ?? "Voter lookup failed.");
+      if (!ok) throw new Error(data.error ? serverText(data.error) : t("login.lookupFailed"));
 
       setVoter(data.voter);
       setMethod(null);
-      toast.success("Voter found", `${data.voter.displayName}: choose how to verify.`);
+      toast.success(t("login.toastFoundTitle"), t("login.toastFoundBody", { name: data.voter.displayName }));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -103,7 +105,7 @@ export default function VoterLoginPage() {
 
   function onVerified(message: string) {
     setVerified(message);
-    toast.success("Identity verified", "Loading your ballot…");
+    toast.success(t("login.toastVerifiedTitle"), t("login.toastVerifiedBody"));
     setTimeout(() => router.push("/ballot"), 800);
   }
 
@@ -114,14 +116,14 @@ export default function VoterLoginPage() {
       return;
     }
     setError(message);
-    toast.error("Verification failed", message);
+    toast.error(t("login.toastFailedTitle"), message);
   }
 
-  // ---- Stage 2A: Face Recognition Unlock -----------------------------------
+  // ---- Stage 2A: face scan ---------------------------------------------------
   async function getLivenessChallenge(): Promise<Challenge> {
-    if (!voter) throw new Error("Enter your National ID first.");
+    if (!voter) throw new Error(t("login.enterIdFirst"));
     const { ok, data } = await postJSON<Challenge>("/api/auth/voter/liveness", { idNumber: voter.idNumber });
-    if (!ok) throw new Error(data.error ?? "Could not start the liveness check.");
+    if (!ok) throw new Error(data.error ? serverText(data.error) : t("login.livenessFailed"));
     return data;
   }
 
@@ -137,10 +139,11 @@ export default function VoterLoginPage() {
         frames,
       });
       if (!ok) {
-        onAuthError(data.error ?? "Face verification failed.", data.hasVoted);
-        throw new Error(data.error ?? "Face verification failed.");
+        const msg = data.error ? serverText(data.error) : t("login.faceFailed");
+        onAuthError(msg, data.hasVoted);
+        throw new Error(msg);
       }
-      onVerified(`Face matched (${data.confidence ?? 0}% similarity, scanned in ${seconds} s).`);
+      onVerified(t("login.faceMatched", { p: data.confidence ?? 0, s: seconds }));
     } finally {
       setBusy(false);
     }
@@ -148,9 +151,9 @@ export default function VoterLoginPage() {
 
   // Voters enrolled through AWS Rekognition are scanned and matched by AWS.
   async function getAwsSession(): Promise<AwsSession> {
-    if (!voter) throw new Error("Enter your National ID first.");
+    if (!voter) throw new Error(t("login.enterIdFirst"));
     const { ok, data } = await postJSON<AwsSession>("/api/face/aws-session", { purpose: "login", idNumber: voter.idNumber });
-    if (!ok) throw new Error(data.error ?? "Could not start the face scan.");
+    if (!ok) throw new Error(data.error ? serverText(data.error) : t("login.scanFailed"));
     return data;
   }
 
@@ -163,21 +166,21 @@ export default function VoterLoginPage() {
         idNumber: voter.idNumber,
         awsTicket: ticket,
       });
-      if (!ok) return onAuthError(data.error ?? "Face verification failed.", data.hasVoted);
-      onVerified(`Face matched (${data.confidence ?? 0}% similarity).`);
+      if (!ok) return onAuthError(data.error ? serverText(data.error) : t("login.faceFailed"), data.hasVoted);
+      onVerified(t("login.faceMatchedAws", { p: data.confidence ?? 0 }));
     } finally {
       setBusy(false);
     }
   }
 
-  // ---- Stage 2B: Fingerprint Sensor Unlock (WebAuthn) -----------------------
+  // ---- Stage 2B: fingerprint (WebAuthn) ---------------------------------------
   async function handleFingerprint() {
     if (!voter) return;
     setBusy(true);
     setError("");
     try {
       const opt = await postJSON<{ hasVoted?: boolean }>("/api/webauthn/login/options", { idNumber: voter.idNumber });
-      if (!opt.ok) return onAuthError(opt.data.error ?? "Could not start fingerprint scan.", opt.data.hasVoted);
+      if (!opt.ok) return onAuthError(opt.data.error ? serverText(opt.data.error) : t("login.fingerStartFailed"), opt.data.hasVoted);
 
       const response = await startAuthentication({
         optionsJSON: opt.data as unknown as Parameters<typeof startAuthentication>[0]["optionsJSON"],
@@ -186,309 +189,262 @@ export default function VoterLoginPage() {
         idNumber: voter.idNumber,
         response,
       });
-      if (!ver.ok) return onAuthError(ver.data.error ?? "Fingerprint verification failed.", ver.data.hasVoted);
-      onVerified("Fingerprint verified by this device's secure sensor.");
+      if (!ver.ok) return onAuthError(ver.data.error ? serverText(ver.data.error) : t("login.fingerFailed"), ver.data.hasVoted);
+      onVerified(t("login.fingerVerified"));
     } catch (err) {
       const e = err as Error;
-      onAuthError(
-        e.name === "NotAllowedError"
-          ? "Fingerprint scan was cancelled or timed out. Try again, or use Face Recognition."
-          : e.message
-      );
+      onAuthError(e.name === "NotAllowedError" ? t("login.fingerCancelled") : serverText(e.message));
     } finally {
       setBusy(false);
     }
   }
 
+  const before = list<{ title: string; text: string }>("login.before");
+  const beforeIcons = [IdCard, ScanFace, MapPin];
+
   return (
-    <main className="mx-auto min-h-dvh max-w-6xl px-4 py-10">
+    <main className="mx-auto min-h-dvh max-w-6xl px-4 py-12">
       <PageTitle
-        eyebrow="Voter Verification"
-        title={voter ? "Choose how to verify" : "Enter your National ID"}
-        lead={
-          voter
-            ? "Use either method. Both prove it is really you without sending a password anywhere."
-            : "We check the voter register first. If this ID has already voted, the ballot never opens."
-        }
+        eyebrow={t("login.eyebrow")}
+        title={voter ? t("login.titleVerify") : t("login.titleId")}
+        lead={voter ? t("login.leadVerify") : t("login.leadId")}
       />
 
-      <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="min-w-0">
-
-      {/* PROMINENT DOUBLE-VOTE ALERT */}
-      {denied && (
-        <div
-          role="alert"
-          className="mb-6 overflow-hidden rounded-2xl border-2 border-clay bg-clay-soft shadow-sm animate-fade-up"
-        >
-          <div className="flex items-center gap-2 bg-clay px-5 py-2 text-xs font-black uppercase tracking-widest text-white">
-            <ShieldAlert className="size-4" aria-hidden /> Security Alert · Single-Vote Lockout
-          </div>
-          <div className="flex items-start gap-4 p-5">
-            <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-clay-soft text-clay">
-              <ShieldAlert className="size-8" aria-hidden />
-            </span>
-            <div className="space-y-2">
-              <p className="text-lg font-bold leading-snug text-clay">{denied}</p>
-              <p className="text-xs text-clay">
-                The attempt was blocked before any ballot was shown. Each National ID can cast exactly one ballot.
-              </p>
-              <div className="flex flex-wrap gap-3 pt-1 text-xs">
-                <Link href="/results" className="font-semibold text-ink underline">
-                  Verify a receipt on the ledger
-                </Link>
-                <button onClick={() => setDenied(null)} className="text-clay underline">
-                  Dismiss
-                </button>
+      <div className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0">
+          {/* Double-vote alert */}
+          {denied && (
+            <div role="alert" className="mb-6 overflow-hidden rounded-2xl border border-clay bg-clay-soft animate-fade-up">
+              <div className="flex items-center gap-2 bg-clay px-5 py-2.5 font-mono text-[11px] uppercase tracking-[0.16em] text-white">
+                <ShieldAlert className="size-4" aria-hidden /> {t("login.alertTitle")}
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <section className="glass relative overflow-hidden p-6 sm:p-8">
-        {/* STAGE 1 */}
-        {!voter && (
-          <div className="space-y-6 animate-fade-up">
-            <StageBadge n={1} label="ID check" />
-            <form onSubmit={handleLookup} className="space-y-4">
-              <div>
-                <label htmlFor="auth-id" className="field-label">
-                  National ID Number
-                </label>
-                <div className="relative">
-                  <IdCard className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-ink-faint" />
-                  <input
-                    id="auth-id"
-                    className="field pl-12 text-center font-mono text-xl tracking-[0.3em]"
-                    inputMode="numeric"
-                    autoComplete="off"
-                    maxLength={8}
-                    value={idNumber}
-                    onChange={(e) => {
-                      setIdNumber(e.target.value.replace(/\D/g, ""));
-                      setError("");
-                    }}
-                    placeholder="12345678"
-                    autoFocus
-                    required
-                  />
+              <div className="space-y-2 p-5">
+                <p className="text-lg font-semibold leading-snug text-clay">{denied}</p>
+                <p className="text-sm text-clay/90">{t("login.alertBody")}</p>
+                <div className="flex flex-wrap gap-4 pt-1 text-sm">
+                  <Link href="/verify" className="font-semibold text-ink underline underline-offset-4">
+                    {t("login.alertVerify")}
+                  </Link>
+                  <button onClick={() => setDenied(null)} className="text-clay underline underline-offset-4">
+                    {t("common.dismiss")}
+                  </button>
                 </div>
               </div>
-
-              {error && <ErrorBox msg={error} />}
-
-              <button
-                id="auth-lookup-btn"
-                type="submit"
-                className="btn-primary w-full py-3.5"
-                disabled={busy || idNumber.length < 7}
-              >
-                {busy ? (
-                  <>
-                    <Loader2 className="size-5 animate-spin" aria-hidden /> Checking voter register…
-                  </>
-                ) : (
-                  <>
-                    Check eligibility <ArrowRight className="size-5" aria-hidden />
-                  </>
-                )}
-              </button>
-            </form>
-
-            <div className="grid gap-2 border-t border-line pt-4 text-xs text-ink-soft sm:grid-cols-2">
-              <span className="flex items-center gap-1.5">
-                <ShieldCheck className="size-4 text-forest" /> Double voting is checked before any ballot opens
-              </span>
-              <Link href="/results" className="flex items-center gap-1.5 hover:text-ink sm:justify-end">
-                <BarChart3 className="size-4 text-forest" /> View live results
-              </Link>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* STAGE 2 */}
-        {voter && (
-          <div className="space-y-6 animate-fade-up">
-            <StageBadge n={2} label="Biometric verification" />
+          <section className="glass relative overflow-hidden p-6 sm:p-9">
+            {/* Stage 1 */}
+            {!voter && (
+              <div className="space-y-7 animate-fade-up">
+                <StageBadge n={1} label={t("login.stageId")} text={t("login.stage", { n: 1, label: t("login.stageId") })} />
+                <form onSubmit={handleLookup} className="space-y-5">
+                  <div>
+                    <label htmlFor="auth-id" className="field-label">
+                      {t("login.idLabel")}
+                    </label>
+                    <div className="relative">
+                      <IdCard className="pointer-events-none absolute left-5 top-1/2 size-5 -translate-y-1/2 text-ink-faint" />
+                      <input
+                        id="auth-id"
+                        className="field py-4 pl-14 text-center font-mono text-2xl tracking-[0.35em]"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={8}
+                        value={idNumber}
+                        onChange={(e) => {
+                          setIdNumber(e.target.value.replace(/\D/g, ""));
+                          setError("");
+                        }}
+                        placeholder="12345678"
+                        autoFocus
+                        required
+                      />
+                    </div>
+                  </div>
 
-            <div className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-paper p-4">
-              <div className="min-w-0">
-                <p className="font-bold text-ink">{voter.displayName}</p>
-                <p className="flex items-center gap-1 truncate text-xs text-ink-soft">
-                  <MapPin className="size-3.5 shrink-0" /> ID {voter.idNumber} · {voter.ward} Ward, {voter.county}
-                </p>
-              </div>
-              <button onClick={reset} className="btn-ghost shrink-0 px-3 py-1.5 text-xs" disabled={busy}>
-                Change ID
-              </button>
-            </div>
+                  {error && <ErrorBox msg={error} />}
 
-            {verified ? (
-              <div className="rounded-2xl border border-forest/30 bg-forest-soft p-6 text-center animate-fade-up">
-                <CheckCircle2 className="mx-auto mb-2 size-10 text-forest" />
-                <p className="font-semibold text-forest">{verified}</p>
-                <p className="mt-1 flex items-center justify-center gap-2 text-xs text-ink-soft">
-                  <Loader2 className="size-3.5 animate-spin" /> Opening your ballot…
-                </p>
-              </div>
-            ) : (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Verification method">
-                  <ChoiceCard
-                    active={method === "face"}
-                    disabled={!voter.hasFace || busy}
-                    onClick={() => {
-                      setMethod("face");
-                      setError("");
-                    }}
-                    icon={<ScanFace className="size-7" />}
-                    title="Option A · Face Recognition"
-                    desc={voter.hasFace ? "Live camera scan matched against your enrolled 128-point face profile." : "No face profile enrolled for this ID."}
-                  />
-                  <ChoiceCard
-                    active={method === "fingerprint"}
-                    disabled={!voter.hasPasskey || !webauthnOk || busy}
-                    onClick={() => {
-                      setMethod("fingerprint");
-                      setError("");
-                    }}
-                    icon={<Fingerprint className="size-7" />}
-                    title="Option B · Fingerprint Sensor"
-                    desc={
-                      !webauthnOk
-                        ? "This browser does not support biometric passkeys."
-                        : voter.hasPasskey
-                          ? "Touch ID / Windows Hello / Android fingerprint via WebAuthn."
-                          : "No fingerprint enrolled for this ID. Use Face Recognition."
-                    }
-                  />
-                </div>
-
-                {error && <ErrorBox msg={error} />}
-
-                {method === "face" && (
-                  <div className="space-y-3 animate-fade-up">
-                    {voter.faceProvider === "aws" ? (
-                      <AwsFaceScan startSession={getAwsSession} onComplete={handleAwsFace} actionLabel="Verify Face" />
+                  <button id="auth-lookup-btn" type="submit" className="btn-primary w-full py-4 text-base" disabled={busy || idNumber.length < 7}>
+                    {busy ? (
+                      <>
+                        <Loader2 className="size-5 animate-spin" aria-hidden /> {t("login.checking")}
+                      </>
                     ) : (
-                      <FaceScan getChallenge={getLivenessChallenge} onScan={handleFace} actionLabel="Verify Face" />
+                      <>
+                        {t("login.check")} <ArrowRight className="size-5" aria-hidden />
+                      </>
                     )}
-                    {busy && (
-                      <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">
-                        <Loader2 className="size-4 animate-spin text-forest" /> Comparing with the voter register…
-                      </p>
-                    )}
-                  </div>
-                )}
+                  </button>
+                </form>
 
-                {method === "fingerprint" && (
-                  <div className="space-y-4 py-4 text-center animate-fade-up">
-                    <span className="mx-auto grid size-24 place-items-center rounded-2xl border border-forest/40 bg-forest-soft text-forest animate-pulse-ring">
-                      <Fingerprint className="size-12" />
-                    </span>
-                    <p className="mx-auto max-w-sm text-xs text-ink-soft">
-                      Your fingerprint never leaves this device. The sensor signs a one-time challenge and only the
-                      signature is checked against the public key stored at registration.
-                    </p>
-                    <button onClick={handleFingerprint} disabled={busy} className="btn-primary mx-auto px-8 py-3.5">
-                      {busy ? (
-                        <>
-                          <Loader2 className="size-5 animate-spin" /> Waiting for sensor…
-                        </>
-                      ) : (
-                        <>
-                          <Fingerprint className="size-5" /> Scan Fingerprint
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {!method && (
-                  <p className="text-center text-xs text-ink-faint">Select Option A or Option B to continue.</p>
-                )}
-              </>
+                <div className="grid gap-2 border-t border-line pt-5 text-sm text-ink-soft sm:grid-cols-2">
+                  <span className="flex items-center gap-2">
+                    <ShieldCheck className="size-4 shrink-0 text-forest" /> {t("login.doubleCheck")}
+                  </span>
+                  <Link href="/results" className="flex items-center gap-2 hover:text-ink sm:justify-end">
+                    <BarChart3 className="size-4 text-forest" /> {t("login.viewResults")}
+                  </Link>
+                </div>
+              </div>
             )}
 
-            <button type="button" onClick={reset} className="btn-ghost w-full text-xs" disabled={busy}>
-              <ArrowLeft className="size-4" /> Cancel and return to ID entry
-            </button>
-          </div>
-        )}
-      </section>
-      </div>
+            {/* Stage 2 */}
+            {voter && (
+              <div className="space-y-7 animate-fade-up">
+                <StageBadge n={2} label={t("login.stageBio")} text={t("login.stage", { n: 2, label: t("login.stageBio") })} />
 
-      <aside className="space-y-5 lg:sticky lg:top-24">
-        <div className="rounded-2xl border border-line bg-paper-2/60 p-6">
-          <p className="eyebrow">Before you begin</p>
-          <ul className="mt-4 space-y-4 text-sm">
-            {[
-              [IdCard, "Your National ID number", "7 or 8 digits, exactly as printed on your card."],
-              [ScanFace, "Your face or your fingerprint", "Good light for the camera, or the phone you enrolled at registration."],
-              [MapPin, "Nothing else", "Your county, constituency and ward ballot loads on its own, wherever you are."],
-            ].map(([Icon, title, text]) => {
-              const I = Icon as typeof IdCard;
-              return (
-                <li key={title as string} className="flex gap-3">
-                  <span className="grid size-9 shrink-0 place-items-center rounded-full bg-surface text-forest ring-1 ring-line">
-                    <I className="size-4" aria-hidden />
-                  </span>
-                  <span>
-                    <span className="block font-semibold text-ink">{title as string}</span>
-                    <span className="text-ink-soft">{text as string}</span>
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
+                <div className="flex items-center justify-between gap-3 border-y border-line py-4">
+                  <div className="min-w-0">
+                    <p className="font-display text-2xl leading-tight text-ink">{voter.displayName}</p>
+                    <p className="mt-1 flex items-center gap-1.5 truncate font-mono text-xs text-ink-soft">
+                      <MapPin className="size-3.5 shrink-0" />{" "}
+                      {t("login.voterWhere", {
+                        id: voter.idNumber,
+                        ward: t("region.ward", { name: voter.ward ?? "" }),
+                        county: t("region.county", { name: voter.county ?? "" }),
+                      })}
+                    </p>
+                  </div>
+                  <button onClick={reset} className="btn-ghost shrink-0 px-3.5 py-1.5 text-xs" disabled={busy}>
+                    {t("login.changeId")}
+                  </button>
+                </div>
+
+                {verified ? (
+                  <div className="rounded-2xl border border-forest/30 bg-forest-soft p-7 text-center animate-fade-up">
+                    <CheckCircle2 className="mx-auto mb-3 size-10 text-forest" />
+                    <p className="text-lg font-semibold text-forest">{verified}</p>
+                    <p className="mt-2 flex items-center justify-center gap-2 text-sm text-ink-soft">
+                      <Loader2 className="size-4 animate-spin" /> {t("login.opening")}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label={t("login.methodGroup")}>
+                      <ChoiceCard
+                        active={method === "face"}
+                        disabled={!voter.hasFace || busy}
+                        onClick={() => {
+                          setMethod("face");
+                          setError("");
+                        }}
+                        icon={<ScanFace className="size-6" />}
+                        title={t("login.faceTitle")}
+                        desc={voter.hasFace ? t("login.faceDesc") : t("login.faceNone")}
+                      />
+                      <ChoiceCard
+                        active={method === "fingerprint"}
+                        disabled={!voter.hasPasskey || !webauthnOk || busy}
+                        onClick={() => {
+                          setMethod("fingerprint");
+                          setError("");
+                        }}
+                        icon={<Fingerprint className="size-6" />}
+                        title={t("login.fingerTitle")}
+                        desc={!webauthnOk ? t("login.fingerUnsupported") : voter.hasPasskey ? t("login.fingerDesc") : t("login.fingerNone")}
+                      />
+                    </div>
+
+                    {error && <ErrorBox msg={error} />}
+
+                    {method === "face" && (
+                      <div className="space-y-3 animate-fade-up">
+                        {voter.faceProvider === "aws" ? (
+                          <AwsFaceScan startSession={getAwsSession} onComplete={handleAwsFace} actionLabel={t("login.verifyFace")} />
+                        ) : (
+                          <FaceScan getChallenge={getLivenessChallenge} onScan={handleFace} actionLabel={t("login.verifyFace")} />
+                        )}
+                        {busy && (
+                          <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">
+                            <Loader2 className="size-4 animate-spin text-forest" /> {t("login.comparing")}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {method === "fingerprint" && (
+                      <div className="space-y-5 py-4 text-center animate-fade-up">
+                        <span className="mx-auto grid size-24 place-items-center rounded-full border border-forest/40 bg-forest-soft text-forest animate-pulse-ring">
+                          <Fingerprint className="size-11" />
+                        </span>
+                        <p className="mx-auto max-w-sm text-sm text-ink-soft">{t("login.fingerPrivacy")}</p>
+                        <button onClick={handleFingerprint} disabled={busy} className="btn-primary mx-auto px-8 py-3.5">
+                          {busy ? (
+                            <>
+                              <Loader2 className="size-5 animate-spin" /> {t("login.waitingSensor")}
+                            </>
+                          ) : (
+                            <>
+                              <Fingerprint className="size-5" /> {t("login.scanFinger")}
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+
+                    {!method && <p className="text-center text-sm text-ink-faint">{t("login.chooseOne")}</p>}
+                  </>
+                )}
+
+                <button type="button" onClick={reset} className="btn-ghost w-full text-sm" disabled={busy}>
+                  <ArrowLeft className="size-4" /> {t("login.cancel")}
+                </button>
+              </div>
+            )}
+          </section>
         </div>
-        <div className="rounded-2xl bg-forest-deep p-6 text-[#d6e2d4]">
-          <ShieldCheck className="size-6 text-[#e9c77e]" aria-hidden />
-          <p className="mt-3 font-display text-xl font-semibold text-paper">Your ballot stays secret.</p>
-          <p className="mt-2 text-sm leading-relaxed">
-            The ledger records your choices with an anonymous receipt code only. Your name and ID number are never
-            stored next to your vote.
-          </p>
-        </div>
-      </aside>
+
+        <aside className="space-y-5 lg:sticky lg:top-28">
+          <div className="rounded-2xl border border-line p-6">
+            <p className="eyebrow">{t("login.beforeTitle")}</p>
+            <ul className="mt-5 space-y-5 text-sm">
+              {before.map(({ title, text }, i) => {
+                const I = beforeIcons[i];
+                return (
+                  <li key={title} className="flex gap-3.5">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-full bg-forest-soft text-forest">
+                      <I className="size-4" aria-hidden />
+                    </span>
+                    <span>
+                      <span className="block font-semibold text-ink">{title}</span>
+                      <span className="text-ink-soft">{text}</span>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          <div className="rounded-2xl bg-night p-7 text-paper/70">
+            <ShieldCheck className="size-6 text-[#e8c167]" aria-hidden />
+            <p className="mt-4 font-display text-[1.7rem] leading-tight text-paper">{t("login.secretTitle")}</p>
+            <p className="mt-2 text-sm leading-relaxed">{t("login.secretText")}</p>
+          </div>
+        </aside>
       </div>
     </main>
   );
 }
 
-function StageBadge({ n, label }: { n: number; label: string }) {
+function StageBadge({ n, text }: { n: number; label: string; text: string }) {
   return (
-    <div className="flex items-center gap-3 text-xs font-semibold text-ink-soft">
+    <div className="flex items-center gap-3">
       {[1, 2].map((i) => (
         <span
           key={i}
-          className={`grid size-7 place-items-center rounded-full border text-[11px] ${
-            i < n
-              ? "border-forest bg-forest text-white"
-              : i === n
-                ? "border-forest bg-forest-soft text-forest"
-                : "border-line text-ink-faint"
+          className={`grid size-7 place-items-center rounded-full border font-mono text-[11px] ${
+            i < n ? "border-forest bg-forest text-white" : i === n ? "border-ink bg-ink text-paper" : "border-line-strong text-ink-faint"
           }`}
         >
           {i < n ? <CheckCircle2 className="size-4" /> : i}
         </span>
       ))}
-      <span className="uppercase tracking-wider">
-        Stage {n} of 2 · {label}
-      </span>
+      <span className="eyebrow">{text}</span>
     </div>
   );
 }
 
-function ChoiceCard(props: {
-  active: boolean;
-  disabled: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  title: string;
-  desc: string;
-}) {
+function ChoiceCard(props: { active: boolean; disabled: boolean; onClick: () => void; icon: React.ReactNode; title: string; desc: string }) {
   return (
     <button
       type="button"
@@ -496,22 +452,16 @@ function ChoiceCard(props: {
       aria-checked={props.active}
       disabled={props.disabled}
       onClick={props.onClick}
-      className={`flex h-full flex-col items-start gap-3 rounded-2xl border p-5 text-left transition disabled:cursor-not-allowed disabled:opacity-40 ${
-        props.active
-          ? "border-forest bg-forest-soft ring-2 ring-forest/40"
-          : "border-line bg-paper hover:border-forest/40 hover:bg-paper-2"
+      className={`flex h-full flex-col items-start gap-4 rounded-2xl border p-5 text-left transition disabled:cursor-not-allowed disabled:opacity-40 ${
+        props.active ? "border-ink bg-surface ring-1 ring-ink" : "border-line bg-paper hover:border-ink-faint"
       }`}
     >
-      <span
-        className={`grid size-12 place-items-center rounded-xl ${
-          props.active ? "bg-forest text-white" : "bg-forest-soft text-forest"
-        }`}
-      >
+      <span className={`grid size-11 place-items-center rounded-full ${props.active ? "bg-forest text-white" : "bg-forest-soft text-forest"}`}>
         {props.icon}
       </span>
       <span>
-        <span className="block font-bold text-ink">{props.title}</span>
-        <span className="mt-1 block text-xs text-ink-soft">{props.desc}</span>
+        <span className="block text-base font-semibold text-ink">{props.title}</span>
+        <span className="mt-1 block text-sm leading-relaxed text-ink-soft">{props.desc}</span>
       </span>
     </button>
   );
@@ -519,7 +469,7 @@ function ChoiceCard(props: {
 
 function ErrorBox({ msg }: { msg: string }) {
   return (
-    <p role="alert" className="flex items-start gap-2 rounded-xl border border-clay/30 bg-clay-soft p-3 text-left text-sm text-clay">
+    <p role="alert" className="flex items-start gap-2.5 rounded-xl border border-clay/30 bg-clay-soft p-3.5 text-left text-sm text-clay">
       <TriangleAlert className="mt-0.5 size-4 shrink-0 text-clay" aria-hidden /> {msg}
     </p>
   );

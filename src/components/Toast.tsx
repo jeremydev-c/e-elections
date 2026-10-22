@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Info, ShieldAlert, X } from "lucide-react";
+import { useI18n } from "@/lib/i18n/I18n";
 
 type Kind = "success" | "error" | "info";
 type ToastItem = { id: number; kind: Kind; title: string; body?: string };
@@ -21,6 +22,7 @@ const STYLES: Record<Kind, { box: string; icon: typeof Info }> = {
 };
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
+  const { t: tr } = useI18n();
   const [items, setItems] = useState<ToastItem[]>([]);
   const nextId = useRef(1);
 
@@ -57,14 +59,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             <div
               key={t.id}
               role={t.kind === "error" ? "alert" : "status"}
-              className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border p-4 shadow-[0_12px_32px_-12px_rgb(31_34_25/0.35)] animate-fade-up ${box}`}
+              className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border p-4 shadow-[0_16px_40px_-16px_rgb(19_21_15/0.35)] animate-fade-up ${box}`}
             >
               <Icon className="mt-0.5 size-5 shrink-0" aria-hidden />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold">{t.title}</p>
                 {t.body && <p className="mt-0.5 break-words text-xs opacity-80">{t.body}</p>}
               </div>
-              <button onClick={() => dismiss(t.id)} className="opacity-60 hover:opacity-100" aria-label="Dismiss">
+              <button onClick={() => dismiss(t.id)} className="opacity-60 hover:opacity-100" aria-label={tr("common.dismiss")}>
                 <X className="size-4" />
               </button>
             </div>

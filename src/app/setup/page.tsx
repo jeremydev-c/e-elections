@@ -2,20 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  CheckCircle2,
-  Database,
-  KeyRound,
-  Loader2,
-  RotateCcw,
-  Sprout,
-  TriangleAlert,
-  UserCog,
-  UserPlus,
-} from "lucide-react";
+import { ArrowUpRight, CheckCircle2, Database, KeyRound, Loader2, RotateCcw, Sprout, TriangleAlert, UserCog, UserPlus } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
 import { useToast } from "@/components/Toast";
 import { AuditLogPanel } from "@/components/AuditLogPanel";
+import { useI18n } from "@/lib/i18n/I18n";
 
 type Status = {
   ok: boolean;
@@ -33,8 +24,11 @@ type SeedResponse = {
   admin?: { username: string; password: string };
 };
 
+const WALK_LINKS = ["/register", "/login", "/results", "/results", "/login"];
+
 export default function SetupPage() {
   const toast = useToast();
+  const { t, list, serverText, locale } = useI18n();
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -52,16 +46,16 @@ export default function SetupPage() {
   }, []);
 
   useEffect(() => {
-    const t = setTimeout(load, 0);
-    return () => clearTimeout(t);
+    const id = setTimeout(load, 0);
+    return () => clearTimeout(id);
   }, [load]);
 
   async function seed(reset: "none" | "votes" | "all") {
-    if (reset === "votes" && !confirm("Wipe ALL ballots and let every voter vote again?")) return;
-    if (reset === "all" && prompt('This deletes every voter and ballot. Type "RESET" to confirm.') !== "RESET") return;
+    if (reset === "votes" && !confirm(t("setup.confirmVotes"))) return;
+    if (reset === "all" && prompt(t("setup.confirmAll")) !== "RESET") return;
 
     setBusy(reset);
-    setLog(["Working… (inserting ~4,200 candidates can take up to a minute on a cold cluster)"]);
+    setLog([t("setup.working")]);
     try {
       const res = await fetch("/api/seed", {
         method: "POST",
@@ -69,14 +63,14 @@ export default function SetupPage() {
         body: JSON.stringify({ reset }),
       });
       const data: SeedResponse = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      if (!res.ok) throw new Error(data.error ?? "Seed failed");
+      if (!res.ok) throw new Error(serverText(data.error) || t("setup.seedFailed"));
       setLog(data.log ?? []);
       if (data.admin) setNewAdmin(data.admin);
-      toast.success(reset === "none" ? "Demo data ready" : "Reset complete", "Database seeded for judging.");
+      toast.success(reset === "none" ? t("setup.seeded") : t("setup.resetDone"), t("setup.seededBody"));
       await load();
     } catch (err) {
       setLog([`✖ ${(err as Error).message}`]);
-      toast.error("Seed failed", (err as Error).message);
+      toast.error(t("setup.seedFailed"), (err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -92,120 +86,123 @@ export default function SetupPage() {
         body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Login failed");
+      if (!res.ok) throw new Error(serverText(data.error) || t("setup.loginFailed"));
       setPassword("");
-      toast.success("Signed in", `Welcome, ${data.username}`);
+      toast.success(t("setup.signedIn"), t("setup.welcome", { name: data.username }));
       await load();
     } catch (err) {
-      toast.error("Login failed", (err as Error).message);
+      toast.error(t("setup.loginFailed"), (err as Error).message);
     } finally {
       setBusy(null);
     }
   }
 
   const canManage = !!status?.admin;
+  const electionStatus = status?.election?.status;
 
   return (
-    <main className="mx-auto min-h-dvh max-w-4xl space-y-6 px-4 py-8">
-      <PageTitle eyebrow="Officials' portal" title="Setup & Seed Data">
+    <main className="mx-auto min-h-dvh max-w-4xl space-y-6 px-4 py-12">
+      <PageTitle eyebrow={t("setup.eyebrow")} title={t("setup.title")}>
         {canManage && (
-          <Link href="/register" id="go-register" className="btn-primary px-4 py-2 text-sm">
-            <UserPlus className="size-4" aria-hidden /> Register voters
+          <Link href="/register" id="go-register" className="btn-primary px-5 py-2.5 text-sm">
+            <UserPlus className="size-4" aria-hidden /> {t("setup.register")}
           </Link>
         )}
       </PageTitle>
 
       {/* Status */}
-      <section className="glass space-y-4 p-6">
-        <div className="flex items-center gap-2">
-          <Database className="size-5 text-forest" />
-          <h2 className="font-display font-bold text-ink">MongoDB Atlas status</h2>
-        </div>
+      <section className="glass space-y-5 p-6 sm:p-8">
+        <h2 className="flex items-center gap-2.5 font-display text-3xl text-ink">
+          <Database className="size-5 text-forest" /> {t("setup.dbTitle")}
+        </h2>
         {!status ? (
           <p className="flex items-center gap-2 text-sm text-ink-soft">
-            <Loader2 className="size-4 animate-spin" /> Connecting…
+            <Loader2 className="size-4 animate-spin" /> {t("setup.connecting")}
           </p>
         ) : !status.ok ? (
-          <p className="flex items-start gap-2 rounded-xl border border-clay/40 bg-clay-soft p-3 text-sm text-clay">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" /> Cannot reach the database: {status.error}. Check
-            MONGODB_URI in .env.local and that your IP is allowed in Atlas → Network Access.
+          <p className="flex items-start gap-2 rounded-xl border border-clay/40 bg-clay-soft p-3.5 text-sm text-clay">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" /> {t("setup.dbError", { error: status.error ?? "" })}
           </p>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat label="Candidates" value={status.counts.candidates} />
-            <Stat label="Registered voters" value={status.counts.voters} />
-            <Stat label="Ballots in ledger" value={status.counts.ballots} />
-            <Stat label="Election" value={status.election?.status ?? "NOT SET"} />
-          </div>
+          <dl className="grid grid-cols-2 overflow-hidden rounded-xl border border-line sm:grid-cols-4">
+            <Stat label={t("setup.candidates")} value={status.counts.candidates.toLocaleString(locale)} />
+            <Stat label={t("setup.voters")} value={status.counts.voters.toLocaleString(locale)} />
+            <Stat label={t("setup.ballots")} value={status.counts.ballots.toLocaleString(locale)} />
+            <Stat label={t("setup.election")} value={electionStatus ? t(`results.statusValues.${electionStatus}`) : t("setup.notSet")} />
+          </dl>
         )}
       </section>
 
       {/* First-run admin password */}
       {newAdmin && (
-        <section className="space-y-2 rounded-2xl border-2 border-ochre/40 bg-ochre-soft p-5" role="alert">
-          <p className="flex items-center gap-2 font-bold text-ochre-deep">
-            <KeyRound className="size-5" /> Election official account created: save this password now
+        <section className="space-y-2 rounded-2xl border border-ochre/50 bg-ochre-soft p-6" role="alert">
+          <p className="flex items-center gap-2 font-semibold text-ochre-deep">
+            <KeyRound className="size-5" /> {t("setup.newAdmin")}
           </p>
           <p className="font-mono text-sm text-ink">
-            username: <strong>{newAdmin.username}</strong> · password: <strong>{newAdmin.password}</strong>
+            {t("common.username")}: <strong>{newAdmin.username}</strong> · {t("common.password")}: <strong>{newAdmin.password}</strong>
           </p>
-          <p className="text-xs text-ochre-deep">It is stored only as a scrypt hash and will never be shown again.</p>
+          <p className="text-xs text-ochre-deep">{t("setup.newAdminNote")}</p>
         </section>
       )}
 
       {/* Actions */}
       {status?.ok && (
-        <section className="glass space-y-5 p-6">
-          <div className="flex items-center gap-2">
-            <Sprout className="size-5 text-forest" />
-            <h2 className="font-display font-bold text-ink">Seed demo data</h2>
-          </div>
-          <p className="text-sm text-ink-soft">
-            Creates fictional candidates for all 6 seats in all 47 counties, 290 constituencies and 1,450 wards, opens
-            the election window. Safe to run again: existing data is kept.
-          </p>
+        <section className="glass space-y-5 p-6 sm:p-8">
+          <h2 className="flex items-center gap-2.5 font-display text-3xl text-ink">
+            <Sprout className="size-5 text-forest" /> {t("setup.seedTitle")}
+          </h2>
+          <p className="text-[15px] leading-relaxed text-ink-soft">{t("setup.seedText")}</p>
 
           {!status.hasAdmin || canManage ? (
             <div className="flex flex-wrap gap-3">
               <button onClick={() => seed("none")} disabled={!!busy} className="btn-primary">
                 {busy === "none" ? <Loader2 className="size-4 animate-spin" /> : <Sprout className="size-4" />}
-                {status.hasAdmin ? "Seed / top up demo data" : "Initialize demo database"}
+                {status.hasAdmin ? t("setup.seedTop") : t("setup.seedInit")}
               </button>
               {canManage && (
                 <>
                   <button onClick={() => seed("votes")} disabled={!!busy} className="btn-ghost">
                     {busy === "votes" ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
-                    Reset votes (keep voters)
+                    {t("setup.resetVotes")}
                   </button>
                   <button onClick={() => seed("all")} disabled={!!busy} className="btn-danger">
                     {busy === "all" ? <Loader2 className="size-4 animate-spin" /> : <TriangleAlert className="size-4" />}
-                    Full reset
+                    {t("setup.resetAll")}
                   </button>
                 </>
               )}
             </div>
           ) : (
-            <form onSubmit={login} className="grid gap-3 rounded-2xl border border-line bg-paper p-4 sm:grid-cols-[1fr_1fr_auto]">
+            <form onSubmit={login} className="grid gap-3 rounded-xl border border-line p-5 sm:grid-cols-[1fr_1fr_auto]">
               <p className="flex items-center gap-2 text-sm text-ink-soft sm:col-span-3">
-                <UserCog className="size-4 text-forest" /> Sign in as an election official to seed or reset.
+                <UserCog className="size-4 text-forest" /> {t("setup.signInPrompt")}
               </p>
-              <input className="field" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
+              <input
+                className="field"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder={t("common.username")}
+                aria-label={t("common.username")}
+                autoComplete="username"
+              />
               <input
                 className="field"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
+                placeholder={t("common.password")}
+                aria-label={t("common.password")}
                 autoComplete="current-password"
               />
               <button className="btn-primary" disabled={busy === "login" || !password}>
-                {busy === "login" && <Loader2 className="size-4 animate-spin" />} Sign in
+                {busy === "login" && <Loader2 className="size-4 animate-spin" />} {t("common.signIn")}
               </button>
             </form>
           )}
 
           {log.length > 0 && (
-            <ul className="space-y-1 rounded-xl bg-paper p-4 font-mono text-xs text-forest">
+            <ul className="space-y-1 rounded-xl bg-paper-2 p-4 font-mono text-xs text-forest">
               {log.map((l, i) => (
                 <li key={i}>{l.startsWith("✖") ? l : `✔ ${l}`}</li>
               ))}
@@ -217,39 +214,32 @@ export default function SetupPage() {
       {canManage && <AuditLogPanel />}
 
       {/* Judge walkthrough */}
-      <section className="glass space-y-3 p-6">
-        <h2 className="font-display font-bold text-ink">5-minute judging walkthrough</h2>
-        <ol className="space-y-2 text-sm text-ink-soft">
-          {[
-            ["/register", "Register a judge with a live face scan and a fingerprint"],
-            ["/login", "Vote: ID check → choose Face or Fingerprint → location-aware ballot"],
-            ["/results", "Watch the bars jump within 3 s; verify the receipt; run the chain audit"],
-            ["/results", "Press \"Simulate Hacker Tamper Test\" to show the SHA-256 alarm"],
-            ["/login", "Try the same ID again: ACCESS DENIED (double voting blocked)"],
-          ].map(([href, text], i) => (
-            <li key={i} className="flex items-start gap-3">
-              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-forest-soft text-xs font-bold text-forest">
-                {i + 1}
-              </span>
-              <Link href={href} className="hover:text-ink">
-                {text}
+      <section className="glass space-y-4 p-6 sm:p-8">
+        <h2 className="font-display text-3xl text-ink">{t("setup.walkTitle")}</h2>
+        <ol className="divide-y divide-line">
+          {list<string>("setup.walk").map((text, i) => (
+            <li key={i}>
+              <Link href={WALK_LINKS[i]} className="group flex items-center gap-4 py-3.5 text-[15px] text-ink-soft hover:text-ink">
+                <span className="font-display text-2xl leading-none text-line-strong group-hover:text-forest">{String(i + 1).padStart(2, "0")}</span>
+                <span className="flex-1">{text}</span>
+                <ArrowUpRight className="size-4 shrink-0 text-ink-faint" aria-hidden />
               </Link>
             </li>
           ))}
         </ol>
-        <p className="flex items-center gap-1.5 pt-1 text-xs text-ink-faint">
-          <CheckCircle2 className="size-3.5" /> Command-line alternative: <span className="font-mono">npm run seed</span>
+        <p className="flex items-center gap-1.5 text-sm text-ink-faint">
+          <CheckCircle2 className="size-3.5" /> {t("setup.cli")} <span className="font-mono">npm run seed</span>
         </p>
       </section>
     </main>
   );
 }
 
-function Stat({ label, value }: { label: string; value: number | string }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="card p-4">
-      <p className="text-[11px] uppercase tracking-wide text-ink-soft">{label}</p>
-      <p className="mt-1 text-xl font-bold tabular-nums text-ink">{typeof value === "number" ? value.toLocaleString() : value}</p>
+    <div className="border-line bg-surface p-4 [&:not(:last-child)]:border-r max-sm:[&:nth-child(2)]:border-r-0 max-sm:[&:nth-child(-n+2)]:border-b">
+      <dt className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-ink-faint">{label}</dt>
+      <dd className="mt-2 font-display text-3xl leading-none tabular-nums text-ink">{value}</dd>
     </div>
   );
 }

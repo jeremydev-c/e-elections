@@ -24,6 +24,8 @@ E-ELECTIONS shows how voting could be **cheaper, faster, accessible from anywher
 4. **Sealed receipt.** The ballot is stored with no name or ID, chained to the previous ballot by SHA-256 and sealed with an HMAC. The voter gets an anonymous receipt code to check later.
 5. **Live results.** Results are recomputed from the verified ledger and refresh every 3 seconds, by county, constituency and ward.
 
+**English and Kiswahili.** The whole site switches language from the top bar (EN | SW), including the messages the server sends; every Kiswahili text is type-checked against the English, so none can be missing.
+
 Feature phones are supported too: a `*2027#` **USSD** gateway (Africa's Talking protocol, SIM-bound plus a PIN) uses the same ballot pipeline.
 
 | Verify your receipt | Live results and chain audit |
