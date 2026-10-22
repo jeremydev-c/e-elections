@@ -92,7 +92,7 @@ export function FaceCapture({
   const [guidedStage, setGuidedStage] = useState<GuidedStage>("CENTER");
   const [telemetry, setTelemetry] = useState<BiometricTelemetry | null>(null);
   const [stageProgress, setStageProgress] = useState(0);
-  const [hudMessage, setHudMessage] = useState("Align face inside the biometric frame");
+  const [hudMessage, setHudMessage] = useState("Look at the camera");
 
   // Refs mirror state for the async render loop (state would be stale there).
   const telemetryRef = useRef<BiometricTelemetry | null>(null);
@@ -185,7 +185,7 @@ export function FaceCapture({
 
       if (!streamRef.current) return; // camera was closed while models loaded
       setStatus({ kind: "live" });
-      goToStage("CENTER", "Align face in center frame");
+      goToStage("CENTER", "Look at the camera");
       startLiveTelemetryLoop(api);
     } catch (err) {
       stopCamera();
@@ -257,68 +257,48 @@ export function FaceCapture({
     currentStage: GuidedStage,
     isCapturing: boolean
   ) {
-    // 1. Dark vignette around edges
-    const grad = ctx.createRadialGradient(cw / 2, ch / 2, ch * 0.35, cw / 2, ch / 2, ch * 0.75);
-    grad.addColorStop(0, "rgba(31, 34, 25, 0)");
-    grad.addColorStop(1, "rgba(31, 34, 25, 0.65)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, cw, ch);
-
-    // 2. Center Biometric Guide Oval
-    const ovalW = cw * 0.42;
-    const ovalH = ch * 0.68;
+    // 1. Whole-frame guide: the face may be anywhere in the picture, so the
+    // target is the full square, marked by corner brackets at its edges.
     const cx = cw / 2;
-    const cy = ch / 2;
+    const inset = 12;
+    const topText = 34;
+    const bottomText = ch - 22;
 
     const isAligned =
       telem?.faceFound &&
       !telem?.multipleFaces &&
-      telem?.isCentered &&
+      telem?.inFrame &&
       telem?.distanceStatus === "OPTIMAL" &&
       telem?.isFullyFrontal;
 
     const isTurnedSide = telem?.faceFound && !telem?.multipleFaces && !telem?.isFullyFrontal;
 
     ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, ovalW / 2, ovalH / 2, 0, 0, Math.PI * 2);
-    ctx.lineWidth = isAligned ? 3.5 : 2;
     ctx.strokeStyle = isAligned
       ? "rgba(143, 209, 158, 0.95)" // Kenya green
       : isTurnedSide
         ? "rgba(245, 158, 11, 0.9)" // Amber: face is turned sideways!
         : telem?.multipleFaces
           ? "rgba(239, 68, 68, 0.9)" // Red warning
-          : "rgba(255, 255, 255, 0.25)";
-    ctx.stroke();
-
-    // Corner crosshairs on oval
-    ctx.strokeStyle = isAligned ? "#8fd19e" : isTurnedSide ? "#f59e0b" : "rgba(255, 255, 255, 0.4)";
-    ctx.lineWidth = 2;
-    const arm = 16;
-    // Top
-    ctx.beginPath();
-    ctx.moveTo(cx, cy - ovalH / 2 - arm);
-    ctx.lineTo(cx, cy - ovalH / 2 + arm);
-    ctx.stroke();
-    // Bottom
-    ctx.beginPath();
-    ctx.moveTo(cx, cy + ovalH / 2 - arm);
-    ctx.lineTo(cx, cy + ovalH / 2 + arm);
-    ctx.stroke();
-    // Left
-    ctx.beginPath();
-    ctx.moveTo(cx - ovalW / 2 - arm, cy);
-    ctx.lineTo(cx - ovalW / 2 + arm, cy);
-    ctx.stroke();
-    // Right
-    ctx.beginPath();
-    ctx.moveTo(cx + ovalW / 2 - arm, cy);
-    ctx.lineTo(cx + ovalW / 2 + arm, cy);
-    ctx.stroke();
+          : "rgba(255, 255, 255, 0.45)";
+    ctx.lineWidth = isAligned ? 4 : 2.5;
+    const arm = Math.min(cw, ch) * 0.12;
+    const l = inset, t = inset, r = cw - inset, b = ch - inset;
+    for (const [x, y, dx, dy] of [
+      [l, t, 1, 1],
+      [r, t, -1, 1],
+      [l, b, 1, -1],
+      [r, b, -1, -1],
+    ]) {
+      ctx.beginPath();
+      ctx.moveTo(x, y + dy * arm);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + dx * arm, y);
+      ctx.stroke();
+    }
     ctx.restore();
 
-    // Side turn feedback banner directly above/below oval
+    // Side turn feedback banner at the bottom of the frame
     if (isTurnedSide && telem) {
       ctx.save();
       ctx.fillStyle = "rgba(245, 158, 11, 0.95)";
@@ -332,14 +312,14 @@ export function FaceCapture({
       } else if (Math.abs(telem.roll) > 10) {
         hint = "STRAIGHTEN HEAD TILT (HOLD LEVEL)";
       }
-      ctx.fillText(hint, cx, cy + ovalH / 2 + 28);
+      ctx.fillText(hint, cx, bottomText);
       ctx.restore();
     } else if (isAligned) {
       ctx.save();
       ctx.fillStyle = "rgba(143, 209, 158, 0.95)";
       ctx.font = "bold 13px system-ui, -apple-system, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("✓ FULLY FRONTAL — HOLD STEADY", cx, cy + ovalH / 2 + 28);
+      ctx.fillText("✓ FULLY FRONTAL — HOLD STEADY", cx, bottomText);
       ctx.restore();
     }
 
@@ -420,7 +400,7 @@ export function FaceCapture({
       ctx.fillStyle = "rgba(143, 209, 158, 0.95)";
       ctx.font = "bold 15px monospace";
       ctx.textAlign = "center";
-      ctx.fillText(text, cx, cy - ovalH / 2 - 28);
+      ctx.fillText(text, cx, topText);
       ctx.restore();
     }
     if (isCapturing && currentStage === "TURN_LEFT") {
@@ -428,7 +408,7 @@ export function FaceCapture({
       ctx.fillStyle = "rgba(143, 209, 158, 0.95)";
       ctx.font = "bold 15px monospace";
       ctx.textAlign = "center";
-      ctx.fillText("◂ TURN HEAD SLIGHTLY LEFT (3D LIVENESS) ◂", cx, cy - ovalH / 2 - 28);
+      ctx.fillText("◂ TURN HEAD SLIGHTLY LEFT (3D LIVENESS) ◂", cx, topText);
       ctx.restore();
     }
   }
@@ -449,19 +429,19 @@ export function FaceCapture({
     }
 
     const stage = stageRef.current;
-    const framed = data.isCentered && data.distanceStatus === "OPTIMAL" && data.isFullyFrontal;
+    const framed = data.inFrame && data.distanceStatus === "OPTIMAL" && data.isFullyFrontal;
 
-    // --- STAGE 1: CENTER & FULLY FRONTAL FACE ---
+    // --- STAGE 1: A FULLY FRONTAL FACE ANYWHERE IN THE FRAME ---
     if (stage === "CENTER") {
       if (!framed) {
-        if (!data.isCentered) setHudMessage("Align face in center frame");
+        if (!data.inFrame) setHudMessage("Keep your whole face in the picture");
         else if (data.distanceStatus === "TOO_FAR") setHudMessage("Move slightly closer");
         else if (data.distanceStatus === "TOO_CLOSE") setHudMessage("Step back slightly");
         else setHudMessage(data.poseFeedback);
         return;
       }
-      setHudMessage("Frontal alignment locked ✓ (Hold steady…)");
-      const next = progressRef.current + 0.3;
+      setHudMessage("Face found ✓ (Hold steady…)");
+      const next = progressRef.current + 0.5;
       if (next < 1) return setProgress(next);
       playBiometricSound("step");
       const challenge = challengeRef.current;
@@ -622,7 +602,7 @@ export function FaceCapture({
     }
     isCapturingRef.current = true;
     setIsCapturing(true);
-    goToStage("CENTER", "Align face in center frame (facing fully front)");
+    goToStage("CENTER", "Look straight at the camera");
     playBiometricSound("step");
   }
 

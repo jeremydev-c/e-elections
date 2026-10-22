@@ -196,7 +196,8 @@ export type BiometricTelemetry = {
   symmetryRatio: number; // ~1.0 when perfectly front
   isFullyFrontal: boolean; // TRUE only when strictly facing front (not sides)
   poseFeedback: string;
-  isCentered: boolean;
+  /** The whole face is inside the camera picture (anywhere in it). */
+  inFrame: boolean;
   distanceStatus: "TOO_FAR" | "TOO_CLOSE" | "OPTIMAL";
   lightingStatus: "TOO_DARK" | "TOO_BRIGHT" | "GOOD";
   isBlinking: boolean;
@@ -232,7 +233,7 @@ export async function analyzeLiveFrame(
       symmetryRatio: 1,
       isFullyFrontal: false,
       poseFeedback: "Looking for face…",
-      isCentered: false,
+      inFrame: false,
       distanceStatus: "TOO_FAR",
       lightingStatus: "GOOD",
       isBlinking: false,
@@ -255,7 +256,7 @@ export async function analyzeLiveFrame(
       symmetryRatio: pose.symmetryRatio,
       isFullyFrontal: false,
       poseFeedback: "Multiple faces detected — ensure 1 person only",
-      isCentered: false,
+      inFrame: false,
       distanceStatus: "OPTIMAL",
       lightingStatus: "GOOD",
       isBlinking: false,
@@ -270,15 +271,16 @@ export async function analyzeLiveFrame(
   // 1. Strict head pose & frontality
   const pose = estimatePoseFromLandmarks(landmarks);
 
-  // 2. Centering & Distance estimation
-  const boxCenterX = box.x + box.width / 2;
-  const boxCenterY = box.y + box.height / 2;
-  const isCentered =
-    Math.abs(boxCenterX - vw / 2) < vw * 0.2 && Math.abs(boxCenterY - vh / 2) < vh * 0.25;
+  // 2. Framing & distance. Any position in the picture is fine, as long as the
+  // face is not cut off by an edge (a small margin allows for box jitter).
+  const edge = Math.min(vw, vh) * 0.02;
+  const inFrame =
+    box.x >= -edge && box.y >= -edge && box.x + box.width <= vw + edge && box.y + box.height <= vh + edge;
 
   const widthRatio = box.width / vw;
   let distanceStatus: "TOO_FAR" | "TOO_CLOSE" | "OPTIMAL" = "OPTIMAL";
-  if (widthRatio < 0.2) distanceStatus = "TOO_FAR";
+  // Same minimum size as the capture quality check (TOO_SMALL), so nothing passes here only to fail there.
+  if (widthRatio < 0.16) distanceStatus = "TOO_FAR";
   else if (widthRatio > 0.75) distanceStatus = "TOO_CLOSE";
 
   // 3. Eye Aspect Ratio (EAR) for blink detection
@@ -297,7 +299,7 @@ export async function analyzeLiveFrame(
     symmetryRatio: pose.symmetryRatio,
     isFullyFrontal: pose.isFullyFrontal,
     poseFeedback: pose.poseFeedback,
-    isCentered,
+    inFrame,
     distanceStatus,
     lightingStatus: "GOOD",
     isBlinking,
