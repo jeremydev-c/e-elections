@@ -31,7 +31,11 @@ currentHash = SHA-256(canonical ballot)
 seal        = HMAC-SHA-256(LEDGER_SECRET, currentHash)
 ```
 
-The first ballot links to a fixed genesis hash. Verifying the ledger means recomputing every hash and seal in order: one changed character anywhere breaks every link after it. Voters can check that their own receipt is in the chain, and the results page can run a full chain audit.
+**One chain per county.** Each of the 47 counties has its own chain, starting from its own genesis hash (so a ballot cannot be moved to another county's chain), with its own HMAC-sealed head. Voters in different counties never wait for each other, and the cached vote counts are kept per candidate per county for the same reason. (20 voters casting at the same instant: p95 15.5 s with one national chain, 5.9 s with county chains.)
+
+**One fingerprint for the election.** The Merkle root of all the county chain heads changes if any ballot anywhere is changed, added or deleted. It is shown with the results and can be published and checked by anyone later.
+
+Verifying the ledger means recomputing every hash and seal of every county chain in order: one changed character anywhere breaks every link after it, and the total number of ballots must equal the voters marked as voted. Voters can check that their own receipt is in its chain, and the results page can run a full audit. Ballots cast before county chains existed stay verifiable on the original single chain.
 
 ## Liveness (anti-spoofing)
 
@@ -79,7 +83,7 @@ This is a prototype. Before any binding election it would need:
 ## Tests
 
 ```bash
-npx tsx scripts/security-test.ts      # 34 offline checks: seals, tamper attacks, encryption, face decisions, template learning, 8-bit index, liveness tokens, CSRF
+npx tsx scripts/security-test.ts      # 39 offline checks: seals, county chains, Merkle root, tamper attacks, encryption, face decisions, template learning, 8-bit index, liveness tokens, CSRF
 LFW_DIR=... npx tsx scripts/face-engine-test.ts   # 13 checks on real photos: every way a face scan must be refused, real matching
 LFW_DIR=... npx tsx scripts/benchmark-lfw.ts      # accuracy on the LFW benchmark
 ```

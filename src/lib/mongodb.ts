@@ -37,7 +37,8 @@ export async function connectDB(): Promise<typeof mongoose> {
       ...(process.env.MONGODB_DB && { dbName: process.env.MONGODB_DB }),
       bufferCommands: false,
       serverSelectionTimeoutMS: 10_000,
-      maxPoolSize: 10,
+      // Each ballot is a short transaction with a few round trips: allow many at once.
+      maxPoolSize: 50,
       minPoolSize: 0,
       maxIdleTimeMS: 60_000,
     });

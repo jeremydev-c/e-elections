@@ -10,10 +10,14 @@ process.loadEnvFile(path.resolve(__dirname, "..", ".env.local"));
 import { NextRequest } from "next/server";
 import {
   GENESIS_HASH,
+  chainGenesis,
   computeBallotHash,
+  merkleRoot,
   sealBallot,
   sealHead,
   verifyChain,
+  verifyLedger,
+  type ChainHeadRecord,
   type SealedBallot,
 } from "../src/lib/hashChain";
 import { decryptFaceTemplate, encryptFaceTemplate } from "../src/lib/biometricVault";
@@ -92,6 +96,43 @@ const problems = (a: ReturnType<typeof verifyChain>) => a.issues.map((i) => `${i
 
   const r5 = verifyChain(blocks, head, 5);
   check("Turnout mismatch (stuffed/deleted ballot) detected", r5.issues.some((i) => i.problem === "TURNOUT_MISMATCH"));
+}
+
+// ------------------------------------------------------- county chains + Merkle root
+{
+  // Two counties, each with its own chain from its own genesis.
+  const countyChain = (chain: string, county: string, n: number) => {
+    const blocks: SealedBallot[] = [];
+    let prev = chainGenesis(chain);
+    for (let i = 1; i <= n; i++) {
+      const b = { chain, seq: i, receiptCode: `KE-2027-${chain}AA-00${i}`, selections: { PRESIDENT: `p${i % 2}` }, county, timestamp: new Date(1_800_000_000_000 + i * 1000), previousHash: prev };
+      const currentHash = computeBallotHash(b);
+      blocks.push({ ...b, currentHash, seal: sealBallot(currentHash) });
+      prev = currentHash;
+    }
+    return { blocks, head: { chain, seq: n, lastHash: prev, seal: sealHead(n, prev, chain) } as ChainHeadRecord };
+  };
+  const nyeri = countyChain("19", "Nyeri", 3);
+  const laikipia = countyChain("31", "Laikipia", 2);
+  const all = [...nyeri.blocks, ...laikipia.blocks];
+  const heads = [nyeri.head, laikipia.head];
+  const ok = verifyLedger(all, heads, 5);
+  check("County chains verify independently and together", ok.intact && ok.chains === 2, `${ok.checked} ballots, ${ok.chains} chains`);
+
+  // Move a Nyeri ballot onto the Laikipia chain: wrong genesis/link and wrong chain in its hash.
+  const moved = { ...nyeri.blocks[0], chain: "31" };
+  const r1 = verifyLedger([...nyeri.blocks.slice(1), moved, ...laikipia.blocks], heads, 5);
+  check("Ballot moved to another county's chain detected", !r1.intact, r1.issues.map((i) => `${i.problem}@${i.chain}`).slice(0, 3).join(","));
+
+  // Delete a county's newest ballot and its chain head: the turnout and the head check catch it.
+  const r2 = verifyLedger([...nyeri.blocks, ...laikipia.blocks.slice(0, 1)], [nyeri.head], 5);
+  check("County chain with its head deleted detected", !r2.intact, r2.issues.map((i) => i.problem).join(","));
+
+  // One fingerprint for the election: any change in any county changes the Merkle root.
+  const rootBefore = merkleRoot(heads);
+  const extra = countyChain("31", "Laikipia", 3);
+  check("Merkle root changes when any county's chain changes", merkleRoot([nyeri.head, extra.head]) !== rootBefore);
+  check("Merkle root does not depend on the order heads are read", merkleRoot([laikipia.head, nyeri.head]) === rootBefore);
 }
 
 // ------------------------------------------------------------ encryption

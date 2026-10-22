@@ -11,11 +11,12 @@
 import { connectDB } from "@/lib/mongodb";
 import { COUNTIES, getConstituency, getCounty, getWard } from "@/lib/regions";
 import { hashPassword } from "@/lib/password";
-import { GENESIS_HASH, randomToken } from "@/lib/hashChain";
+import { randomToken } from "@/lib/hashChain";
 import { POSITION_LEVEL, type Position } from "@/lib/positions";
 import { Candidate } from "@/models/Candidate";
 import { Voter } from "@/models/Voter";
 import { VoteLedger, ChainHead } from "@/models/VoteLedger";
+import { TallyShard } from "@/models/TallyShard";
 import { Election, Admin, electionStatus } from "@/models/Election";
 
 export type ResetMode = "none" | "votes" | "all";
@@ -117,10 +118,10 @@ export async function seedDatabase({
   log.push(`Connected to database "${conn.connection.name}"`);
 
   // Make sure all unique indexes exist (idNumber, receiptCode, seq ...).
-  await Promise.all([Voter, Candidate, VoteLedger, ChainHead, Election, Admin].map((m) => m.syncIndexes()));
+  await Promise.all([Voter, Candidate, VoteLedger, ChainHead, TallyShard, Election, Admin].map((m) => m.syncIndexes()));
 
   if (reset !== "none") {
-    await Promise.all([VoteLedger.deleteMany({}), ChainHead.deleteMany({})]);
+    await Promise.all([VoteLedger.deleteMany({}), ChainHead.deleteMany({}), TallyShard.deleteMany({})]);
     if (reset === "all") {
       await Voter.deleteMany({});
       log.push("Reset: all voters, the vote ledger and the chain head were wiped");
@@ -172,8 +173,7 @@ export async function seedDatabase({
   }
   if (oldVoters.length) log.push(`Backfilled region names on ${oldVoters.length} voters`);
 
-  // ---- Chain head (genesis) ----
-  await ChainHead.updateOne({ _id: "main" }, { $setOnInsert: { seq: 0, lastHash: GENESIS_HASH } }, { upsert: true });
+  // ---- Chain heads: each county's chain starts with its first ballot (lib/castVote.ts) ----
 
   // ---- Election window ----
   const existing = await Election.findById("current").lean();

@@ -1,7 +1,7 @@
 import { NextResponse, connection, type NextRequest } from "next/server";
 import { randomInt } from "node:crypto";
 import { auditLedger, type LedgerBlock } from "@/lib/ledger";
-import { computeBallotHash, verifyChain } from "@/lib/hashChain";
+import { LEGACY_CHAIN, computeBallotHash, verifyChain } from "@/lib/hashChain";
 import { clientIp, lockedFor, recordFailure } from "@/lib/rateLimit";
 import { logTamperOnce } from "@/lib/audit";
 import { POSITIONS, POSITION_LABELS, type Position } from "@/lib/positions";
@@ -28,12 +28,10 @@ export async function GET(req: NextRequest) {
 
   try {
     const started = performance.now();
-    const { blocks, head, votersMarkedVoted, audit } = await auditLedger();
+    const { blocks, heads, audit } = await auditLedger();
     const real = {
       ...audit,
       issues: audit.issues.slice(0, 25),
-      headSeq: head?.seq ?? 0,
-      latestHash: head?.lastHash ?? null,
       ms: Math.round(performance.now() - started),
     };
     if (!simulate) {
@@ -49,8 +47,13 @@ export async function GET(req: NextRequest) {
     }
 
     // ---- Pick a victim ballot and a seat to flip ---------------------------
-    const victimIdx = randomInt(blocks.length);
-    const victim = blocks[victimIdx];
+    // The attack happens on the victim's county chain (each county is its own chain).
+    const pick = blocks[randomInt(blocks.length)];
+    const chain = pick.chain ?? LEGACY_CHAIN;
+    const chainBlocks = blocks.filter((b) => (b.chain ?? LEGACY_CHAIN) === chain).sort((a, z) => a.seq - z.seq);
+    const head = heads.find((h) => h.chain === chain) ?? null;
+    const victimIdx = chainBlocks.indexOf(pick);
+    const victim = pick;
     const seat: Position = POSITIONS.find((p) => victim.selections[p]) ?? "PRESIDENT";
     const originalId = victim.selections[seat];
     const original = await Candidate.findById(originalId, { name: 1, position: 1, regionCode: 1 }).lean();
@@ -60,19 +63,19 @@ export async function GET(req: NextRequest) {
     ).lean();
     const forgedId = rival ? String(rival._id) : "000000000000000000000000";
 
-    const clone = (): LedgerBlock[] => blocks.map((b) => ({ ...b, selections: { ...b.selections } }));
+    const clone = (): LedgerBlock[] => chainBlocks.map((b) => ({ ...b, selections: { ...b.selections } }));
 
     // Attack 1: flip the vote only.
     const attack1 = clone();
     attack1[victimIdx].selections[seat] = forgedId;
-    const result1 = verifyChain(attack1, head, votersMarkedVoted);
+    const result1 = verifyChain(attack1, head, undefined, chain);
     const forgedHash = computeBallotHash(attack1[victimIdx]);
 
     // Attack 2: flip the vote AND recompute that ballot's hash to hide it.
     const attack2 = clone();
     attack2[victimIdx].selections[seat] = forgedId;
     attack2[victimIdx].currentHash = computeBallotHash(attack2[victimIdx]);
-    const result2 = verifyChain(attack2, head, votersMarkedVoted);
+    const result2 = verifyChain(attack2, head, undefined, chain);
 
     // Attack 3: flip the vote and REWRITE THE WHOLE CHAIN after it (every later
     // hash, every link, and the chain head). Plain SHA-256 cannot catch this;
@@ -86,13 +89,14 @@ export async function GET(req: NextRequest) {
     const forgedHead = head
       ? { ...head, seq: attack3[attack3.length - 1].seq, lastHash: attack3[attack3.length - 1].currentHash }
       : null;
-    const result3 = verifyChain(attack3, forgedHead, votersMarkedVoted);
+    const result3 = verifyChain(attack3, forgedHead, undefined, chain);
 
     return NextResponse.json({
       audit: real,
       simulation: {
         target: {
           seq: victim.seq,
+          county: victim.county ?? null,
           receiptCode: victim.receiptCode,
           seat,
           seatLabel: POSITION_LABELS[seat],
@@ -106,7 +110,7 @@ export async function GET(req: NextRequest) {
           detected: !result2.intact,
           issues: result2.issues.slice(0, 5),
           note:
-            victimIdx < blocks.length - 1
+            victimIdx < chainBlocks.length - 1
               ? `Ballot #${victim.seq + 1} still points to the ORIGINAL hash, so the link breaks.`
               : "The chain head still records the ORIGINAL hash, so the mismatch is caught.",
         },

@@ -11,8 +11,8 @@ export type LiveAudit = {
   tamperedVotes: number;
   issues: { seq: number; receiptCode: string; problem: string }[];
   cacheDrift: { id: string; name: string; cached: number; ledger: number }[];
-  latestHash: string | null;
-  headSeq: number;
+  chains: number;
+  merkleRoot: string;
 };
 
 type FullAudit = {
@@ -143,7 +143,7 @@ export function LedgerAuditPanel({ live }: { live: LiveAudit | null }) {
               </p>
               <p className="text-xs text-ink-soft">
                 {checked} ballot{checked === 1 ? "" : "s"} re-hashed · live, every 3 s
-                {live?.latestHash && <span className="font-mono text-ink-faint"> · head {live.latestHash.slice(0, 16)}…</span>}
+                {live?.merkleRoot && <span className="font-mono text-ink-faint"> · {live.chains} county chains · root {live.merkleRoot.slice(0, 16)}…</span>}
               </p>
             </div>
           </div>

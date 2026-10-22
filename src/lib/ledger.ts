@@ -1,5 +1,5 @@
 import { connectDB } from "@/lib/mongodb";
-import { verifyChain, type BallotForHash } from "@/lib/hashChain";
+import { LEGACY_CHAIN, verifyLedger, type BallotForHash, type ChainHeadRecord } from "@/lib/hashChain";
 import { VoteLedger, ChainHead } from "@/models/VoteLedger";
 import { Voter } from "@/models/Voter";
 
@@ -10,6 +10,7 @@ export type LedgerBlock = BallotForHash & {
 };
 
 type RawBlock = {
+  chain?: string | null;
   seq: number;
   receiptCode: string;
   selections?: Map<string, string> | Record<string, string> | null;
@@ -34,6 +35,7 @@ function toRecord(m: RawBlock["selections"]): Record<string, string> {
 export function normalizeBlock(raw: unknown): LedgerBlock {
   const b = raw as RawBlock;
   return {
+    ...(b.chain ? { chain: b.chain } : {}),
     seq: b.seq,
     receiptCode: b.receiptCode,
     selections: toRecord(b.selections ?? b.choices),
@@ -47,27 +49,30 @@ export function normalizeBlock(raw: unknown): LedgerBlock {
 
 export async function loadLedger(): Promise<LedgerBlock[]> {
   await connectDB();
-  const docs = await VoteLedger.find().sort({ seq: 1 }).lean();
+  const docs = await VoteLedger.find().sort({ chain: 1, seq: 1 }).lean();
   return docs.map(normalizeBlock);
 }
 
-export async function loadChainHead() {
+/** Every chain's head (one per county that has voted, plus "main" from before county chains). */
+export async function loadChainHeads(): Promise<ChainHeadRecord[]> {
   await connectDB();
-  return ChainHead.findById("main").lean();
+  const heads = await ChainHead.find().lean();
+  return heads.map((h) => ({ chain: String(h._id ?? LEGACY_CHAIN), seq: h.seq ?? 0, lastHash: h.lastHash, seal: h.seal ?? undefined }));
 }
 
 /**
- * Full audit: recomputes every SHA-256 hash, checks every HMAC seal and link,
- * the signed chain head, and that ballots == voters marked as voted.
+ * Full audit: recomputes every SHA-256 hash, checks every HMAC seal and link and
+ * the signed head of every county chain, that ballots == voters marked as voted,
+ * and computes the Merkle root of all the chain heads (one fingerprint of the election).
  */
 export async function auditLedger() {
   const run = async () => {
-    const [blocks, head, votersMarkedVoted] = await Promise.all([
+    const [blocks, heads, votersMarkedVoted] = await Promise.all([
       loadLedger(),
-      loadChainHead(),
+      loadChainHeads(),
       Voter.countDocuments({ hasVoted: true }),
     ]);
-    return { blocks, head, votersMarkedVoted, audit: verifyChain(blocks, head, votersMarkedVoted) };
+    return { blocks, heads, votersMarkedVoted, audit: verifyLedger(blocks, heads, votersMarkedVoted) };
   };
   const first = await run();
   if (first.audit.intact) return first;

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { VoteLedger } from "@/models/VoteLedger";
-import { computeBallotHash, GENESIS_HASH, sealBallot, sealMatches } from "@/lib/hashChain";
+import { chainGenesis, computeBallotHash, sealBallot, sealMatches } from "@/lib/hashChain";
 import { normalizeBlock } from "@/lib/ledger";
 import { clientIp, lockedFor, recordFailure } from "@/lib/rateLimit";
 
@@ -39,14 +39,16 @@ export async function GET(req: NextRequest) {
   const hashValid = recomputedHash === block.currentHash;
   const sealValid = sealMatches(sealBallot(block.currentHash), block.seal);
 
+  // Neighbours on the same (county) chain.
+  const chain = block.chain ?? null;
   let parentValid: boolean;
   if (block.seq === 1) {
-    parentValid = block.previousHash === GENESIS_HASH;
+    parentValid = block.previousHash === chainGenesis(block.chain);
   } else {
-    const parent = await VoteLedger.findOne({ seq: block.seq - 1 }, { currentHash: 1 }).lean();
+    const parent = await VoteLedger.findOne({ chain, seq: block.seq - 1 }, { currentHash: 1 }).lean();
     parentValid = !!parent && parent.currentHash === block.previousHash;
   }
-  const child = await VoteLedger.findOne({ seq: block.seq + 1 }, { previousHash: 1 }).lean();
+  const child = await VoteLedger.findOne({ chain, seq: block.seq + 1 }, { previousHash: 1 }).lean();
   const childValid = !child || child.previousHash === block.currentHash;
 
   return NextResponse.json({

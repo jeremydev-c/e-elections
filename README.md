@@ -34,7 +34,7 @@ Feature phones are supported too: a `*2027#` **USSD** gateway (Africa's Talking 
 
 ## Security highlights
 
-- **Tamper-evident ledger:** each ballot carries the SHA-256 hash of the one before it, plus a server HMAC seal whose key never touches the database. Change, delete or reorder one ballot and the chain breaks; rewriting the whole chain is caught by the seals.
+- **Tamper-evident ledger:** each ballot carries the SHA-256 hash of the one before it, plus a server HMAC seal whose key never touches the database. Change, delete or reorder one ballot and the chain breaks; rewriting the whole chain is caught by the seals. Each county has its own chain (so counties never queue behind each other), and one Merkle root fingerprints the whole election.
 - **One voter, one ballot:** the check-and-cast happens in a single atomic database transaction, so simultaneous attempts cannot slip a second ballot through.
 - **Biometrics encrypted at rest:** face templates use AES-256-GCM, bound to the voter's ID, so encrypted faces cannot be swapped between records (Kenya Data Protection Act 2019 treats biometrics as sensitive data).
 - **Server-side face recognition:** the browser only sends camera frames; the server detects the face (SCRFD), aligns it on 5 points and turns it into a 512-number identity vector (ArcFace ResNet-50, trained on WebFace600K, chosen for its accuracy on African faces). **99.85% on the LFW benchmark** (10-fold), and 0 false accepts in 3,000 impostor pairs at the threshold used. A one-to-many check against the whole register (in-memory face index) rejects lookalikes and double registrations.
@@ -48,7 +48,7 @@ Full details: [SECURITY.md](SECURITY.md).
 
 | Test | Result |
 |---|---|
-| Automated security suite (`scripts/security-test.ts`) | **34 / 34 passed** |
+| Automated security suite (`scripts/security-test.ts`) | **39 / 39 passed** |
 | Face engine on real photos (`scripts/face-engine-test.ts`) | **13 / 13 passed** |
 | Face verification accuracy, LFW 6,000 pairs (`scripts/benchmark-lfw.ts`) | **99.85%** (± 0.17); 0 / 3,000 false accepts and 99.07% true accepts at the app's threshold |
 | Server time for one face scan (6 frames, laptop) | ≈ 0.8 s |

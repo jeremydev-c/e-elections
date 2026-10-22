@@ -36,6 +36,7 @@ import { Admin } from "../src/models/Election";
 import { Candidate } from "../src/models/Candidate";
 import { Voter } from "../src/models/Voter";
 import { VoteLedger } from "../src/models/VoteLedger";
+import { TallyShard } from "../src/models/TallyShard";
 
 const BASE = process.env.E2E_BASE ?? "http://localhost:3005";
 const N_SEQUENTIAL = 40; // voters who vote one after another (timed)
@@ -339,7 +340,7 @@ async function main() {
   await VoteLedger.replaceOne({ _id: victimBlock!._id }, victimBlock!);
 
   const forged = { ...victimBlock!, selections: { ...(victimBlock!.selections as unknown as Record<string, string>), PRESIDENT: String(otherPres._id) } };
-  const forgedHash = computeBallotHash({ ...forged, selections: forged.selections, county: forged.county ?? undefined, timestamp: new Date(forged.timestamp) });
+  const forgedHash = computeBallotHash({ ...forged, chain: forged.chain ?? undefined, selections: forged.selections, county: forged.county ?? undefined, timestamp: new Date(forged.timestamp) });
   await VoteLedger.updateOne({ _id: victimBlock!._id }, { $set: { "selections.PRESIDENT": String(otherPres._id), currentHash: forgedHash } });
   record("changeVoteAndRehash", await audit());
   await VoteLedger.replaceOne({ _id: victimBlock!._id }, victimBlock!);
@@ -353,12 +354,13 @@ async function main() {
   record("resetVoterToVoteAgain", await audit());
   await Voter.updateOne({ _id: someVoter!._id }, { $set: { hasVoted: true } });
 
-  const cand = await Candidate.findOne({ voteCount: { $gt: 0 } });
-  await Candidate.updateOne({ _id: cand!._id }, { $inc: { voteCount: 100 } });
+  // Inflate a cached (per-county) vote counter by 100: results must ignore it and raise the alarm.
+  const shard = await TallyShard.findOne({ votes: { $gt: 0 } });
+  await TallyShard.updateOne({ _id: shard!._id }, { $inc: { votes: 100 } });
   const inflated = await call("GET", "/api/results");
   tamper.inflateTallyCount = { detected: !inflated.data.audit.ledgerIntact, problems: ["TALLY_CACHE_DRIFT"] };
-  const shownVotes = (inflated.data.presidential.candidates as { id: string; votes: number }[]).find((c) => c.id === String(cand!._id))?.votes;
-  await Candidate.updateOne({ _id: cand!._id }, { $inc: { voteCount: -100 } });
+  const shownVotes = (inflated.data.presidential.candidates as { id: string; votes: number }[]).find((c) => c.id === shard!.candidate)?.votes;
+  await TallyShard.updateOne({ _id: shard!._id }, { $inc: { votes: -100 } });
 
   const restored = await audit();
   results.tampering = {

@@ -4,6 +4,7 @@ import { logTamperOnce } from "@/lib/audit";
 import { auditLedger, tallyFromLedger } from "@/lib/ledger";
 import { Voter } from "@/models/Voter";
 import { Candidate } from "@/models/Candidate";
+import { cachedTallies } from "@/models/TallyShard";
 import { Election, electionStatus } from "@/models/Election";
 
 const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 1000) / 10 : 0);
@@ -17,10 +18,11 @@ export async function GET() {
   await connection(); // always live, never prerendered
   try {
     await connectDB();
-    const [totalRegistered, election, { blocks, head, audit }] = await Promise.all([
+    const [totalRegistered, election, { blocks, audit }, shards] = await Promise.all([
       Voter.estimatedDocumentCount(),
       Election.findById("current").lean(),
       auditLedger(),
+      cachedTallies(),
     ]);
     const tally = tallyFromLedger(blocks);
 
@@ -30,9 +32,11 @@ export async function GET() {
       { name: 1, party: 1, partyColor: 1, position: 1, voteCount: 1 }
     ).lean();
 
+    // Cached count = per-county counters + the old single counter (ballots cast before the split).
+    const cached = (c: { _id: unknown; voteCount?: number | null }) => (c.voteCount ?? 0) + (shards.get(String(c._id)) ?? 0);
     const cacheDrift = touched
-      .filter((c) => (c.voteCount ?? 0) !== (tally.get(String(c._id)) ?? 0))
-      .map((c) => ({ id: String(c._id), name: c.name, cached: c.voteCount ?? 0, ledger: tally.get(String(c._id)) ?? 0 }));
+      .filter((c) => cached(c) !== (tally.get(String(c._id)) ?? 0))
+      .map((c) => ({ id: String(c._id), name: c.name, cached: cached(c), ledger: tally.get(String(c._id)) ?? 0 }));
 
     await logTamperOnce([
       ...audit.issues.map((i) => `${i.problem} #${i.seq}`),
@@ -64,8 +68,8 @@ export async function GET() {
         tamperedVotes: audit.tamperedVotes,
         issues: audit.issues.slice(0, 25),
         cacheDrift: cacheDrift.slice(0, 25),
-        latestHash: head?.lastHash ?? null,
-        headSeq: head?.seq ?? 0,
+        chains: audit.chains,
+        merkleRoot: audit.merkleRoot,
       },
       presidential: {
         title: "Presidential Election (Republic of Kenya)",

@@ -7,7 +7,9 @@ import { Schema, model, models, type InferSchemaType, type Model } from "mongoos
  */
 const voteLedgerSchema = new Schema(
   {
-    seq: { type: Number, required: true, unique: true }, // 1, 2, 3 ... chain order
+    // County chain (county code). Absent on ballots of the original single chain ("main").
+    chain: { type: String },
+    seq: { type: Number, required: true }, // 1, 2, 3 ... order within its chain
     receiptCode: { type: String, required: true, unique: true },
     // position -> candidate _id (as string)
     selections: { type: Map, of: String },
@@ -21,6 +23,8 @@ const voteLedgerSchema = new Schema(
   },
   { versionKey: false }
 );
+// One ballot per position in each chain.
+voteLedgerSchema.index({ chain: 1, seq: 1 }, { unique: true });
 
 export type VoteLedgerDoc = InferSchemaType<typeof voteLedgerSchema>;
 
@@ -29,9 +33,11 @@ export const VoteLedger: Model<VoteLedgerDoc> =
   model<VoteLedgerDoc>("VoteLedger", voteLedgerSchema, "vote_ledger");
 
 /**
- * Single document tracking the tip of the chain. Ballots advance it with
- * a compare-and-swap, so two ballots can never claim the same previousHash
- * (no chain forks), and deleting the newest ballot is detectable.
+ * One document per chain (per county, plus "main" for the original single chain)
+ * tracking its tip. Ballots advance it with a compare-and-swap, so two ballots can
+ * never claim the same previousHash (no forks), and deleting the newest ballot is
+ * detectable. Different counties advance different heads, so they never wait for
+ * each other.
  */
 const chainHeadSchema = new Schema(
   {
