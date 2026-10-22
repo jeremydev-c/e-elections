@@ -1,0 +1,27 @@
+{
+ "date": "2026-10-22T18:33:01.513Z",
+ "model": "SCRFD-10GF @320 + 5-point alignment + ArcFace R50 (WebFace600K)",
+ "images": 7701,
+ "noFaceFound": 0,
+ "accuracy10fold": 99.85,
+ "accuracyStdDev": 0.17,
+ "meanBestThreshold": 0.242,
+ "highestImpostorSimilarity": 0.245,
+ "lowestGenuineSimilarity": -0.002,
+ "atAppThreshold": {
+  "threshold": 0.4,
+  "trueAccept": 98.9,
+  "falseAccepts": 0,
+  "impostorPairs": 3000
+ },
+ "atZeroFalseAccepts": {
+  "threshold": 0.246,
+  "trueAccept": 99.73,
+  "falseAccepts": 0,
+  "impostorPairs": 3000
+ },
+ "msPerImage": {
+  "median": 98,
+  "p95": 180
+ }
+}

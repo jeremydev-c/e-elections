@@ -4,17 +4,21 @@
  *   Part 1 (offline, no network): the cost of the 1:N face check for one login,
  *          as the number of enrolled voters grows, extrapolated to Kenya's register:
  *          first downloading every template (the old way), then with the face index.
- *   Part 2 (live): many voters doing the full flow at the same time (ID check →
- *          liveness → face → ballot → cast), and many people watching live results.
+ *   Part 2 (live): many voters doing the flow at the same time (ID check → ballot →
+ *          cast, after a face match), and many people watching live results.
+ *   Part 3 (offline, needs ml-models/ and LFW_DIR): how long the server face engine
+ *          takes for one scan (6 camera frames), i.e. how many scans one server can check.
+ *
+ * The server now checks real camera frames and refuses fake ones, so Part 2 stands in for
+ * the face match with the signed ballot session the server issues after one; Part 3
+ * measures the face work itself.
  *
  *   1. Start the production server on the isolated test database:
  *        MONGODB_DB=e_elections_test npx next start -p 3005
  *   2. npx tsx scripts/load-test.ts
  *
  * Like the end-to-end test it refuses to run unless the server reports the
- * e_elections_test database. Part 2 resets that database. The live part
- * downloads every enrolled template on each face login, so it is kept small
- * (about 70 MB of internet traffic between the server and MongoDB Atlas).
+ * e_elections_test database. Part 2 resets that database.
  * Results are written to scripts/load-results.json.
  */
 import fs from "node:fs";
@@ -26,9 +30,9 @@ import mongoose from "mongoose";
 import { connectDB } from "../src/lib/mongodb";
 import { seedDatabase } from "../src/lib/seed";
 import { decryptFaceTemplate, encryptFaceTemplate } from "../src/lib/biometricVault";
-import { matchScore } from "../src/lib/faceMath";
+import { meanEmbedding, templateSimilarity } from "../src/lib/faceMath";
 import { FaceIndex, NEAREST_K } from "../src/lib/faceIndex";
-import { fuseDescriptors } from "../src/lib/face.client";
+import { BALLOT_COOKIE, BALLOT_TTL, signToken } from "../src/lib/session";
 import { getConstituency, getCounty, getWard } from "../src/lib/regions";
 import { Voter } from "../src/models/Voter";
 
@@ -45,13 +49,15 @@ const WARDS = ["812", "818", "1366", "1371", "1", "11", "1196", "1186", "708", "
 // ------------------------------------------------------------------ helpers
 let seed = 4242;
 const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
-const unit = (v: number[]) => v.map((x) => x / Math.hypot(...v));
-const newFace = () => unit(Array.from({ length: 128 }, rand)).map((x) => x * 0.95);
-const frame = (p: number[]) => p.map((x) => x + rand() * 0.032);
-const reading = (p: number[]) => Array.from({ length: 5 }, () => frame(p));
+const unit = (v: number[]) => {
+  const n = Math.hypot(...v);
+  return v.map((x) => x / n);
+};
+const newFace = () => unit(Array.from({ length: 512 }, rand));
+const frame = (p: number[]) => unit(p.map((x) => x + rand() * 0.06));
 const template = (face: number[]) => {
-  const fused = fuseDescriptors(reading(face).map((d) => Float32Array.from(d)));
-  return { mean: fused.mean, samples: fused.kept };
+  const samples = [frame(face), frame(face), frame(face)];
+  return { mean: meanEmbedding(samples), samples };
 };
 
 const ms = (t0: number) => performance.now() - t0;
@@ -73,22 +79,6 @@ async function call(method: string, url: string, body?: unknown, cookie?: string
   const data = await res.json().catch(() => ({}));
   return { status: res.status, data, time: ms(t0), setCookie: res.headers.getSetCookie?.() ?? [] };
 }
-const cookieFrom = (setCookie: string[], name: string) => setCookie.find((s) => s.startsWith(`${name}=`))?.split(";")[0];
-
-// Simulated liveness telemetry for the moves the server asks for.
-let clock = 0;
-const MOVES: Record<string, [number, number][]> = {
-  TURN_LEFT: [[1, 0.3], [5, 0.3], [10, 0.3], [16, 0.3], [19, 0.3]],
-  TURN_RIGHT: [[2, 0.3], [-4, 0.3], [-9, 0.3], [-15, 0.3], [-18, 0.3]],
-  BLINK: [[0, 0.31], [0, 0.3], [0, 0.11], [0, 0.1], [0, 0.29], [0, 0.31]],
-};
-const evidence = (steps: string[], face: number[]) => ({
-  steps: steps.map((step) => ({
-    step,
-    frames: MOVES[step].map(([yaw, ear]) => ({ t: (clock += 70), yaw, ear })),
-    descriptor: face.map((x) => x + rand() * 0.05),
-  })),
-});
 
 // ------------------------------------------------------------------ part 1: offline 1:N cost
 function offlineOneToN() {
@@ -103,11 +93,11 @@ function offlineOneToN() {
     }
     const bytes = blobs.reduce((s, b) => s + b.blob.length, 0);
     bytesPerTemplate = bytes / n;
-    const probe = reading(newFace());
+    const probe = frame(newFace());
     const t0 = performance.now();
     for (const { blob, id } of blobs) {
       const t = decryptFaceTemplate(blob, id);
-      if (t) matchScore(t, probe);
+      if (t) templateSimilarity(t, probe);
     }
     const t = ms(t0);
     rows.push({ enrolled: n, decryptAndMatchMs: round(t), bytesDownloaded: bytes });
@@ -136,7 +126,7 @@ function offlineIndex(bytesPerTemplate: number) {
     const t0 = performance.now();
     for (const p of probes) index.nearest(p, NEAREST_K);
     const searchMs = ms(t0) / probes.length;
-    const row = { enrolled: n, searchMs: round(searchMs, 1), memoryMB: round((n * 128 * 4) / 1e6), bytesDownloaded: Math.round(NEAREST_K * bytesPerTemplate) };
+    const row = { enrolled: n, searchMs: round(searchMs, 1), memoryMB: round((n * 512 * 4) / 1e6), bytesDownloaded: Math.round(NEAREST_K * bytesPerTemplate) };
     rows.push(row);
     console.log(`  ${n.toLocaleString()} enrolled: ${row.searchMs} ms search, ${row.memoryMB} MB in memory, ${(row.bytesDownloaded / 1e3).toFixed(0)} KB fetched per login`);
   }
@@ -144,7 +134,7 @@ function offlineIndex(bytesPerTemplate: number) {
   const projection = {
     enrolled: KENYA_REGISTER,
     searchMsPerLogin: round((last.searchMs * KENYA_REGISTER) / last.enrolled),
-    memoryGB: round((KENYA_REGISTER * 128 * 4) / 1e9, 1),
+    memoryGB: round((KENYA_REGISTER * 512 * 4) / 1e9, 1),
     kilobytesPerLogin: round(last.bytesDownloaded / 1e3),
   };
   console.log(`  Projected for ${KENYA_REGISTER.toLocaleString()} voters: ${projection.searchMsPerLogin} ms search on one server, ${projection.memoryGB} GB memory, ${projection.kilobytesPerLogin} KB per login`);
@@ -152,7 +142,7 @@ function offlineIndex(bytesPerTemplate: number) {
 }
 
 // ------------------------------------------------------------------ part 2: live load
-type V = { idNumber: string; face: number[] };
+type V = { idNumber: string; face: number[]; voterId?: string; wardCode: string };
 
 async function enrol(n: number): Promise<V[]> {
   const voters: V[] = [];
@@ -161,7 +151,7 @@ async function enrol(n: number): Promise<V[]> {
     const idNumber = String(32_000_000 + i);
     const face = newFace();
     const w = getWard(WARDS[i % WARDS.length])!;
-    voters.push({ idNumber, face });
+    voters.push({ idNumber, face, wardCode: w.code });
     docs.push({
       idNumber,
       fullName: `Load Voter ${idNumber}`,
@@ -175,25 +165,24 @@ async function enrol(n: number): Promise<V[]> {
       faceTemplate: encryptFaceTemplate(template(face), idNumber),
     });
   }
-  await Voter.insertMany(docs);
+  const saved = await Voter.insertMany(docs);
+  saved.forEach((d, i) => (voters[i].voterId = String(d._id)));
   return voters;
 }
 
-type StepTimes = { lookup: number; liveness: number; face: number; ballot: number; cast: number; total: number };
+type StepTimes = { lookup: number; ballot: number; cast: number; total: number };
 
 async function vote(v: V): Promise<{ ok: boolean; failedAt?: string; status?: number; times?: StepTimes }> {
   const t0 = performance.now();
   const lk = await call("POST", "/api/auth/voter/lookup", { idNumber: v.idNumber });
   if (lk.status !== 200) return { ok: false, failedAt: "lookup", status: lk.status };
-  const ch = await call("POST", "/api/auth/voter/liveness", { idNumber: v.idNumber });
-  if (ch.status !== 200) return { ok: false, failedAt: "liveness", status: ch.status };
-  const f = await call("POST", "/api/auth/voter/face", {
-    idNumber: v.idNumber,
-    descriptors: reading(v.face),
-    liveness: { token: ch.data.token, evidence: evidence(ch.data.steps, v.face) },
-  });
-  if (f.status !== 200) return { ok: false, failedAt: "face", status: f.status };
-  const cookie = cookieFrom(f.setCookie, "ee_ballot");
+  // The face match itself is Part 3; here, the session the server issues after one.
+  const w = getWard(v.wardCode)!;
+  const token = await signToken(
+    { role: "voter", voterId: v.voterId, fullName: `Load Voter ${v.idNumber}`, countyCode: w.countyCode, constituencyCode: w.constituencyCode, wardCode: v.wardCode },
+    BALLOT_TTL
+  );
+  const cookie = `${BALLOT_COOKIE}=${token}`;
   const b = await call("GET", "/api/ballot/candidates", undefined, cookie);
   if (b.status !== 200) return { ok: false, failedAt: "ballot", status: b.status };
   const selections: Record<string, string> = {};
@@ -202,7 +191,7 @@ async function vote(v: V): Promise<{ ok: boolean; failedAt?: string; status?: nu
   }
   const c = await call("POST", "/api/cast-vote", { selections }, cookie);
   if (c.status !== 200) return { ok: false, failedAt: "cast", status: c.status };
-  return { ok: true, times: { lookup: lk.time, liveness: ch.time, face: f.time, ballot: b.time, cast: c.time, total: ms(t0) } };
+  return { ok: true, times: { lookup: lk.time, ballot: b.time, cast: c.time, total: ms(t0) } };
 }
 
 async function liveLoad() {
@@ -236,8 +225,6 @@ async function liveLoad() {
       totalMs: stats(times.map((t) => t.total)),
       stepP95Ms: {
         lookup: round(quantile(times.map((t) => t.lookup), 0.95)),
-        liveness: round(quantile(times.map((t) => t.liveness), 0.95)),
-        face: round(quantile(times.map((t) => t.face), 0.95)),
         ballot: round(quantile(times.map((t) => t.ballot), 0.95)),
         cast: round(quantile(times.map((t) => t.cast), 0.95)),
       },
@@ -268,15 +255,47 @@ async function liveLoad() {
   return { registerSize: REGISTER, waves, results: reads };
 }
 
+// ------------------------------------------------------------------ part 3: face engine per scan
+/** Server time for one scan: 6 frames decoded, detected, aligned and turned into identity vectors. */
+async function faceEngine() {
+  const { faceModelsInstalled, decodeImage, detectFaces, alignFace, embedAligned, sessions } = await import("../src/lib/faceEngine");
+  const dir = process.env.LFW_DIR;
+  if (!faceModelsInstalled() || !dir) {
+    console.log("\nPart 3: skipped (needs ml-models/ and LFW_DIR)");
+    return null;
+  }
+  console.log("\nPart 3: server face engine, one scan = 6 camera frames");
+  await sessions();
+  const people = fs.readdirSync(path.join(dir, "lfw")).slice(0, 40);
+  const times: number[] = [];
+  for (const name of people) {
+    const files = fs.readdirSync(path.join(dir, "lfw", name)).slice(0, 1);
+    const buf = fs.readFileSync(path.join(dir, "lfw", name, files[0]));
+    const t0 = performance.now();
+    for (let f = 0; f < 6; f++) {
+      const img = await decodeImage(buf);
+      const face = (await detectFaces(img))[0];
+      if (face) await embedAligned([alignFace(img, face)]);
+    }
+    times.push(ms(t0));
+  }
+  const p50 = quantile(times, 0.5);
+  const out = { scans: times.length, msPerScan: stats(times), scansPerMinutePerServer: round(60_000 / p50) };
+  console.log(`  ${out.msPerScan.p50} ms per scan (p95 ${out.msPerScan.p95} ms): about ${out.scansPerMinutePerServer} scans a minute on this machine`);
+  return out;
+}
+
 async function main() {
   const offline = offlineOneToN();
   const indexed = offlineIndex(offline.bytesPerTemplate);
+  const engine = await faceEngine();
   const live = await liveLoad();
   const out = {
     date: new Date().toISOString(),
     setup: "Laptop running the production build; database on MongoDB Atlas (free tier) over the internet",
     offlineOneToN: offline,
     offlineFaceIndex: indexed,
+    faceEngine: engine,
     live,
   };
   fs.writeFileSync(path.resolve(__dirname, "load-results.json"), JSON.stringify(out, null, 1));

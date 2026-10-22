@@ -6,9 +6,17 @@
  *   2. npx tsx scripts/e2e-election-test.ts
  *
  * It refuses to run unless the server reports the e_elections_test database,
- * so the real election data can never be touched. Faces are simulated
- * 128-point descriptors (real camera tests are done with people separately).
- * Results are written to scripts/e2e-results.json.
+ * so the real election data can never be touched. Results are written to
+ * scripts/e2e-results.json.
+ *
+ * Faces: the server now checks real camera frames (liveness moves, one person,
+ * matching) and refuses anything else, so this test cannot fake a face scan over
+ * HTTP. Test voters are written straight into the test database with encrypted
+ * 512-number templates, and a successful face match is stood in for by the same
+ * signed ballot session the server issues after one. Face checking itself is tested
+ * on real photos by scripts/face-engine-test.ts and scripts/benchmark-lfw.ts. The face
+ * route is still exercised over HTTP for what happens before any scan is examined
+ * (double-vote block, brute-force lock).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -20,8 +28,10 @@ import { connectDB } from "../src/lib/mongodb";
 import { seedDatabase } from "../src/lib/seed";
 import { hashPassword } from "../src/lib/password";
 import { computeBallotHash, randomToken } from "../src/lib/hashChain";
-import { fuseDescriptors } from "../src/lib/face.client";
-import { getWard } from "../src/lib/regions";
+import { encryptFaceTemplate } from "../src/lib/biometricVault";
+import { meanEmbedding } from "../src/lib/faceMath";
+import { BALLOT_COOKIE, BALLOT_TTL, signToken } from "../src/lib/session";
+import { getConstituency, getCounty, getWard } from "../src/lib/regions";
 import { Admin } from "../src/models/Election";
 import { Candidate } from "../src/models/Candidate";
 import { Voter } from "../src/models/Voter";
@@ -31,7 +41,6 @@ const BASE = process.env.E2E_BASE ?? "http://localhost:3005";
 const N_SEQUENTIAL = 40; // voters who vote one after another (timed)
 const N_PARALLEL = 20; // voters who all cast at the same moment
 const N_RACE = 10; // voters who each submit 3 ballots at the same moment
-const N_IMPOSTOR = 12; // attempts to unlock a voter with someone else's face
 
 // Wards in the five demo counties (Laikipia, Nairobi, Mombasa, Kisumu, Uasin Gishu)
 const WARDS = ["812", "818", "1366", "1371", "1", "11", "1196", "1186", "708", "701"];
@@ -43,12 +52,10 @@ const unit = (v: number[]) => {
   const n = Math.hypot(...v);
   return v.map((x) => x / n);
 };
-const newFace = () => unit(Array.from({ length: 128 }, rand)).map((x) => x * 0.95);
-const frame = (p: number[]) => p.map((x) => x + rand() * 0.032);
-const reading = (p: number[]) => Array.from({ length: 5 }, () => frame(p));
+const newFace = () => unit(Array.from({ length: 512 }, rand));
+const frame = (p: number[]) => unit(p.map((x) => x + rand() * 0.06));
 
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
-const pct = (n: number, d: number) => Math.round((n / Math.max(1, d)) * 1000) / 10;
 const ms = (t0: number) => Math.round(performance.now() - t0);
 
 async function call(method: string, url: string, body?: unknown, cookie?: string, headers: Record<string, string> = {}) {
@@ -68,51 +75,45 @@ const cookieFrom = (setCookie: string[], name: string) => {
   return c ? c.split(";")[0] : undefined;
 };
 
-type TestVoter = { idNumber: string; face: number[]; wardCode: string };
+type TestVoter = { idNumber: string; face: number[]; wardCode: string; voterId?: string };
 let idCounter = 31000000;
 function makeVoter(i: number): TestVoter {
   return { idNumber: String(++idCounter), face: newFace(), wardCode: WARDS[i % WARDS.length] };
 }
 
-async function register(v: TestVoter, admin: string, face = v.face) {
+/** A registered voter, as the registration desk would store them after a face scan. */
+async function register(v: TestVoter) {
+  const t0 = performance.now();
   const w = getWard(v.wardCode)!;
-  const fused = fuseDescriptors(reading(face).map((d) => Float32Array.from(d)));
-  return call("POST", "/api/voters", {
-    fullName: `Test Voter ${v.idNumber}`,
+  const samples = [frame(v.face), frame(v.face), frame(v.face)];
+  const doc = await Voter.create({
     idNumber: v.idNumber,
-    phone: `07${v.idNumber.slice(-8)}`,
+    fullName: `Test Voter ${v.idNumber}`,
+    phone: `+2547${v.idNumber.slice(-8)}`,
+    county: getCounty(w.countyCode)!.name,
+    constituency: getConstituency(w.constituencyCode)!.name,
+    ward: w.name,
     countyCode: w.countyCode,
     constituencyCode: w.constituencyCode,
     wardCode: v.wardCode,
-    faceDescriptor: fused.mean,
-    faceSamples: fused.kept,
-  }, admin);
-}
-
-// Simulated liveness: the moves the server asked for, as browser telemetry (one reading every 70 ms).
-let clock = 0;
-const MOVES: Record<string, [number, number][]> = {
-  TURN_LEFT: [[1, 0.3], [5, 0.3], [10, 0.3], [16, 0.3], [19, 0.3]],
-  TURN_RIGHT: [[2, 0.3], [-4, 0.3], [-9, 0.3], [-15, 0.3], [-18, 0.3]],
-  BLINK: [[0, 0.31], [0, 0.3], [0, 0.11], [0, 0.1], [0, 0.29], [0, 0.31]],
-};
-const livenessEvidence = (steps: string[], face: number[]) => ({
-  steps: steps.map((step) => ({
-    step,
-    frames: MOVES[step].map(([yaw, ear]) => ({ t: (clock += 70), yaw, ear })),
-    descriptor: face.map((x) => x + rand() * 0.05),
-  })),
-});
-
-async function verifyFace(v: TestVoter, face = v.face) {
-  const challenge = await call("POST", "/api/auth/voter/liveness", { idNumber: v.idNumber });
-  if (challenge.status !== 200) return challenge;
-  return call("POST", "/api/auth/voter/face", {
-    idNumber: v.idNumber,
-    descriptors: reading(face),
-    liveness: { token: challenge.data.token, evidence: livenessEvidence(challenge.data.steps, face) },
+    faceTemplate: encryptFaceTemplate({ mean: meanEmbedding(samples), samples }, v.idNumber),
   });
+  v.voterId = String(doc._id);
+  return { status: 201, time: ms(t0) };
 }
+
+/** Stands in for a successful face match: the same signed ballot session the server issues after one. */
+async function verifyFace(v: TestVoter) {
+  const w = getWard(v.wardCode)!;
+  const token = await signToken(
+    { role: "voter", voterId: v.voterId, fullName: `Test Voter ${v.idNumber}`, countyCode: w.countyCode, constituencyCode: w.constituencyCode, wardCode: v.wardCode },
+    BALLOT_TTL
+  );
+  return { status: 200, data: {}, time: 0, setCookie: [`${BALLOT_COOKIE}=${token}; Path=/`] };
+}
+
+/** The real face route, with no usable scan: shows what it refuses before looking at any frame. */
+const faceRoute = (v: TestVoter) => call("POST", "/api/auth/voter/face", { idNumber: v.idNumber, liveness: { token: "not-a-real-token" }, frames: [] });
 
 async function pickBallot(cookie: string) {
   const r = await call("GET", "/api/ballot/candidates", undefined, cookie);
@@ -148,57 +149,36 @@ async function main() {
 
   // ---------------------------------------------------------- 1. registration
   const all: TestVoter[] = Array.from({ length: N_SEQUENTIAL + N_PARALLEL + N_RACE }, (_, i) => makeVoter(i));
-  const regTimes: number[] = [];
   let regOk = 0;
-  for (const v of all) {
-    const r = await register(v, admin);
-    regTimes.push(r.time);
-    if (r.status === 201) regOk++;
-    else console.log("registration failed", v.idNumber, r.status, r.data.error);
-  }
-  const dupFace = await register({ ...makeVoter(0), face: all[0].face }, admin);
-  const dupId = await register({ ...all[1] }, admin);
-  const lookalike = all[2].face.map((x) => x + rand() * 0.045);
-  const lookalikeReg = await register(makeVoter(0), admin, lookalike);
+  for (const v of all) if ((await register(v)).status === 201) regOk++;
+  const w0 = getWard(all[1].wardCode)!;
+  const regBody = (idNumber: string, extra: Record<string, unknown>) => ({
+    fullName: "Test Voter", idNumber, phone: "0712345678",
+    countyCode: w0.countyCode, constituencyCode: w0.constituencyCode, wardCode: all[1].wardCode, ...extra,
+  });
+  const noScan = await call("POST", "/api/voters", regBody(String(++idCounter), {}), admin);
+  const dupId = await call("POST", "/api/voters", regBody(all[1].idNumber, { liveness: { token: "x" }, frames: [] }), admin);
   results.registration = {
     attempted: all.length,
     registered: regOk,
-    avgMs: Math.round(mean(regTimes)),
-    duplicateFaceBlocked: dupFace.status === 409,
+    registrationWithoutFaceScanRefused: noScan.status === 400,
     duplicateIdBlocked: dupId.status === 409,
-    lookalikeFlaggedAsDuplicate: lookalikeReg.status === 409,
   };
   console.log("registration", results.registration);
 
-  // ---------------------------------------------------------- 2. impostors (before anyone votes)
-  let impostorRejected = 0;
-  for (let i = 0; i < N_IMPOSTOR; i++) {
-    const victim = all[i];
-    const attacker = all[all.length - 1 - i];
-    const r = await verifyFace(victim, attacker.face);
-    if (r.status === 401) impostorRejected++;
-  }
-  results.impostors = { attempts: N_IMPOSTOR, rejected: impostorRejected, falseAcceptRate: pct(N_IMPOSTOR - impostorRejected, N_IMPOSTOR) };
-  console.log("impostors", results.impostors);
-
   // ---------------------------------------------------------- 3. sequential voting (timed)
   const seq = all.slice(0, N_SEQUENTIAL);
-  const timing = { lookup: [] as number[], face: [] as number[], ballot: [] as number[], cast: [] as number[], total: [] as number[] };
-  let firstTry = 0, secondTry = 0, failedVerify = 0, routedOk = 0, cast = 0;
+  const timing = { lookup: [] as number[], ballot: [] as number[], cast: [] as number[], total: [] as number[] };
+  let firstTry = 0, failedVerify = 0, routedOk = 0, cast = 0;
   const receipts: string[] = [];
   const expected = new Map<string, number>();
   for (const v of seq) {
     const t0 = performance.now();
     const lk = await call("POST", "/api/auth/voter/lookup", { idNumber: v.idNumber });
     timing.lookup.push(lk.time);
-    let f = await verifyFace(v);
+    const f = await verifyFace(v);
     if (f.status === 200) firstTry++;
-    else {
-      f = await verifyFace(v);
-      if (f.status === 200) secondTry++;
-      else { failedVerify++; continue; }
-    }
-    timing.face.push(f.time);
+    else { failedVerify++; continue; }
     const cookie = cookieFrom(f.setCookie, "ee_ballot")!;
     const b = await pickBallot(cookie);
     timing.ballot.push(b.r.time);
@@ -215,8 +195,7 @@ async function main() {
   }
   results.voting = {
     voters: seq.length,
-    verifiedFirstTry: firstTry,
-    verifiedSecondTry: secondTry,
+    sessionsIssued: firstTry,
     notVerified: failedVerify,
     ballotsRoutedCorrectly: routedOk,
     votesCast: cast,
@@ -230,7 +209,7 @@ async function main() {
   for (const v of seq.slice(0, 10) as (TestVoter & { cookie?: string })[]) {
     const lk = await call("POST", "/api/auth/voter/lookup", { idNumber: v.idNumber });
     if (lk.status === 403 && lk.data.hasVoted) { dvLookup++; deniedMsg ||= lk.data.error; }
-    const f = await verifyFace(v);
+    const f = await faceRoute(v);
     if (f.status === 403) dvFace++;
     const c = await call("POST", "/api/cast-vote", { selections: {} }, v.cookie);
     if (c.status === 409 || c.status === 401 || c.status === 400) dvCast++;
@@ -299,7 +278,7 @@ async function main() {
   }
   // a vote appears in results immediately after it is cast
   const extra = makeVoter(3);
-  await register(extra, admin);
+  await register(extra);
   const before = (await call("GET", "/api/results")).data.election.totalVotesCast;
   const fx = await verifyFace(extra);
   const bx = await pickBallot(cookieFrom(fx.setCookie, "ee_ballot")!);
@@ -325,17 +304,17 @@ async function main() {
   const nosql = await call("POST", "/api/webauthn/login/options", { idNumber: { $ne: null } });
   // wrong-region ballot: Governor of another county
   const victim = makeVoter(0);
-  await register(victim, admin);
+  await register(victim);
   const fv = await verifyFace(victim);
   const vc = cookieFrom(fv.setCookie, "ee_ballot")!;
   const bv = await pickBallot(vc);
   const foreignGov = await Candidate.findOne({ position: "GOVERNOR", regionCode: { $ne: getWard(victim.wardCode)!.countyCode } }).lean();
   const wrongRegion = await call("POST", "/api/cast-vote", { selections: { ...bv.selections, GOVERNOR: String(foreignGov!._id) } }, vc);
-  // brute force: wrong faces against one voter
+  // brute force: failed face scans against one voter
   const bruteStatuses: number[] = [];
   const target = makeVoter(1);
-  await register(target, admin);
-  for (let i = 0; i < 6; i++) bruteStatuses.push((await verifyFace(target, newFace())).status);
+  await register(target);
+  for (let i = 0; i < 6; i++) bruteStatuses.push((await faceRoute(target)).status);
   results.attacks = {
     crossSiteBlocked: csrf.status === 403,
     noSqlInjectionBlocked: nosql.status === 400,

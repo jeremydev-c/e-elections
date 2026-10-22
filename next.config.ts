@@ -51,6 +51,8 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,
+  // The server face engine (lib/faceEngine.ts) uses native code: load these from node_modules, don't bundle them.
+  serverExternalPackages: ["onnxruntime-node", "sharp"],
   // A stray package-lock.json in the parent Documents folder makes Turbopack
   // guess the wrong workspace root. Pin it to this project folder.
   turbopack: {
@@ -60,8 +62,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/:path*", headers: securityHeaders },
       { source: "/api/:path*", headers: [{ key: "Cache-Control", value: "no-store" }] },
-      // Face models (~12.6 MB) never change between releases: let phones keep them for a month.
-      { source: "/models/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=2592000, stale-while-revalidate=86400" }] },
+      // The face tracker (MediaPipe, ~17 MB) never changes between releases: let phones keep it for a month.
+      { source: "/mediapipe/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=2592000, stale-while-revalidate=86400" }] },
     ];
   },
 };

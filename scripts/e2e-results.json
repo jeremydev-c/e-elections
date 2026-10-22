@@ -1,41 +1,32 @@
 {
-  "date": "2026-10-22T06:54:57.939Z",
+  "date": "2026-10-22T18:41:06.964Z",
   "base": "http://localhost:3005",
   "registration": {
     "attempted": 70,
     "registered": 70,
-    "avgMs": 742,
-    "duplicateFaceBlocked": true,
-    "duplicateIdBlocked": true,
-    "lookalikeFlaggedAsDuplicate": true
-  },
-  "impostors": {
-    "attempts": 12,
-    "rejected": 12,
-    "falseAcceptRate": 0
+    "registrationWithoutFaceScanRefused": true,
+    "duplicateIdBlocked": true
   },
   "voting": {
     "voters": 40,
-    "verifiedFirstTry": 40,
-    "verifiedSecondTry": 0,
+    "sessionsIssued": 40,
     "notVerified": 0,
     "ballotsRoutedCorrectly": 40,
     "votesCast": 40,
     "avgMs": {
-      "lookup": 180,
-      "face": 512,
-      "ballot": 177,
-      "cast": 851,
-      "total": 1733
+      "lookup": 194,
+      "ballot": 168,
+      "cast": 833,
+      "total": 1197
     },
-    "maxTotalMs": 2068
+    "maxTotalMs": 1796
   },
   "doubleVoting": {
     "attempts": 30,
     "blockedAtIdCheck": 10,
     "blockedAtFace": 10,
     "blockedAtCast": 10,
-    "sampleMessage": "ACCESS DENIED: National ID 31000001 has already cast a ballot at 22 Oct 2026, 09:00–10:00 EAT. Double voting is strictly prevented."
+    "sampleMessage": "ACCESS DENIED: National ID 31000001 has already cast a ballot at 22 Oct 2026, 21:00–22:00 EAT. Double voting is strictly prevented."
   },
   "simultaneousDoubleBallots": {
     "voters": 10,
@@ -46,17 +37,17 @@
   "parallel": {
     "voters": 20,
     "accepted": 20,
-    "wallClockMs": 13967
+    "wallClockMs": 14671
   },
   "results": {
     "ballotsInLedger": 70,
     "resultsReported": 70,
     "presidentialCandidates": 4,
     "presidentialTallyMatchesExpected": true,
-    "avgResultsMs": 249,
+    "avgResultsMs": 234,
     "receiptsChecked": 70,
     "receiptsVerified": 70,
-    "newVoteVisibleInMs": 1086,
+    "newVoteVisibleInMs": 1126,
     "chainIntact": true
   },
   "attacks": {
@@ -75,7 +66,7 @@
   },
   "tampering": {
     "baselineIntact": true,
-    "fullAuditMs": 171,
+    "fullAuditMs": 177,
     "attacks": {
       "changeOneVote": {
         "detected": true,

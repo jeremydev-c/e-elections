@@ -34,6 +34,10 @@ function open(blob: string | null | undefined, idNumber: string): Buffer | null 
   }
 }
 
+/**
+ * mean + samples: 512-number ArcFace vectors from the server engine (lib/faceEngine.ts).
+ * Older records hold 128-number face-api descriptors; those voters must re-enrol.
+ */
 export type FaceTemplateData = { mean: number[]; samples: number[][] };
 
 export function encryptFaceTemplate(t: FaceTemplateData, idNumber: string): string {
@@ -45,7 +49,7 @@ export function decryptFaceTemplate(blob: string | null | undefined, idNumber: s
   if (!plain) return null;
   try {
     const t = JSON.parse(plain.toString("utf8")) as FaceTemplateData;
-    return Array.isArray(t.mean) && t.mean.length === 128 ? t : null;
+    return Array.isArray(t.mean) && (t.mean.length === 512 || t.mean.length === 128) ? t : null;
   } catch {
     return null;
   }

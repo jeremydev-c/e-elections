@@ -20,13 +20,12 @@ import {
   UserPlus,
 } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
-import { FaceCapture, type FaceCaptureResult } from "@/components/FaceCapture";
+import { FaceScan, preloadFaceScan, type Challenge, type FaceScanPayload } from "@/components/FaceScan";
 import { AwsFaceScan, type AwsSession } from "@/components/AwsFaceScan";
 
 /** "aws": faces are checked and stored by AWS Rekognition while our own engine is improved. */
 const FACE_PROVIDER = process.env.NEXT_PUBLIC_FACE_PROVIDER === "aws" ? "aws" : "local";
 import { useToast } from "@/components/Toast";
-import { preloadFaceApi } from "@/lib/face.client";
 import { COUNTIES, getCounty, getWard } from "@/lib/regions";
 
 type Step = 1 | 2 | 3 | 4;
@@ -58,7 +57,7 @@ export default function RegisterPage() {
 
   // Preload face models in background as soon as page mounts
   useEffect(() => {
-    preloadFaceApi().catch(() => {});
+    preloadFaceScan();
     api<{ username: string | null }>("/api/admin/session")
       .then((d) => setAdmin(d.username))
       .catch(() => setAdmin(null));
@@ -298,19 +297,25 @@ function RegistrationWizard() {
     }
   }
 
-  async function submitFace({ descriptor, samples, photoDataUrl }: FaceCaptureResult) {
+  /** A liveness challenge bound to the ID being registered (the server redeems it once). */
+  function getChallenge() {
+    return api<Challenge>("/api/auth/voter/liveness", { method: "POST", body: JSON.stringify({ idNumber: form.idNumber }) });
+  }
+
+  async function submitFace({ liveness, frames }: FaceScanPayload) {
     setBusy(true);
     setError("");
     try {
       const r = await api<Registered>("/api/voters", {
         method: "POST",
-        body: JSON.stringify({ ...form, faceDescriptor: descriptor, faceSamples: samples, photoDataUrl }),
+        body: JSON.stringify({ ...form, liveness, frames }),
       });
-      setRegistered({ ...r, photoDataUrl: photoDataUrl || r.photoDataUrl });
+      setRegistered(r);
       toast.success("Voter registered", `${r.fullName} saved to the central register.`);
       setStep(3);
     } catch (err) {
       setError((err as Error).message);
+      throw err;
     } finally {
       setBusy(false);
     }
@@ -600,7 +605,7 @@ function RegistrationWizard() {
                   actionLabel="Capture & Enroll"
                 />
               ) : (
-                <FaceCapture onCapture={submitFace} actionLabel="Capture & Enroll" />
+                <FaceScan getChallenge={getChallenge} onScan={submitFace} actionLabel="Capture & Enroll" />
               )}
               {busy && (
                 <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">

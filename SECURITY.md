@@ -11,7 +11,7 @@ Please **do not open a public issue** for security problems. Use GitHub's privat
 | Threat | Protection |
 |---|---|
 | Someone votes as another person | Two-step verification: National ID, then face (strict 1:1 match **and** 1:N lookalike check) or a WebAuthn fingerprint bound to the voter's own device |
-| A photo, a phone screen or a pre-recorded video held up to the camera | **Active liveness check**: the server picks a random order of moves (turn left, turn right, blink) for every face login, sealed in a 90-second, single-use token; the face is only matched if the recorded moves are real, in that order, at human speed, and done by the same face |
+| A photo, a phone screen or a pre-recorded video held up to the camera | **Active liveness check**: the server picks a random order of moves (turn left, turn right, blink) for every face scan, sealed in a 90-second, single-use token, and checks the camera frames itself: head turned the requested way, eyes shut, one person throughout. A passive anti-spoofing model scores every scan as well |
 | A voter votes twice | ID check before verification, a second check at face login, and an atomic database transaction at the moment of casting |
 | Ballots are changed, deleted or reordered in the database | SHA-256 hash chain from a genesis hash; anyone can verify it |
 | An attacker rewrites the whole chain consistently | Every ballot and the chain head carry an HMAC seal using `LEDGER_SECRET`, a key kept outside the database |
@@ -36,15 +36,17 @@ The first ballot links to a fixed genesis hash. Verifying the ledger means recom
 ## Liveness (anti-spoofing)
 
 1. `POST /api/auth/voter/liveness` issues a challenge: one of 6 random orders of *turn left, turn right, blink*, inside a signed token (90-second lifetime, bound to the voter's ID, usable once).
-2. The browser guides the voter through the moves, recording head yaw and eye aspect ratio about 15 times a second, plus one face descriptor during each move.
-3. `POST /api/auth/voter/face` redeems the token and checks the evidence (`src/lib/liveness.ts`): every move present, in the issued order, starting from a frontal pose (so an angled photo fails), eyes going open → closed → open against the voter's own baseline, no move faster than a human can do it, and each move's descriptor close to the frontal reading (so one person can't do the moves while another's photo is matched).
+2. The browser (MediaPipe Face Landmarker) guides the voter and captures three frontal frames, then one frame at the peak of each move. It only guides: nothing it measures is trusted.
+3. `POST /api/auth/voter/face` redeems the token and checks the frames on the server (`src/lib/faceScan.ts`): exactly one clear, well-lit face in every frame; the frontal frames are one person; each turn frame shows the head turned the requested way (nose position between the eyes, from the detector's 5 keypoints); the blink frame shows the eyes shut (eye opening from 106 landmarks, below 60% of this voter's own open eyes); every move frame is the same person as the frontal frames.
+4. A passive anti-spoofing model (MiniFASNetV2-SE, Apache-2.0) scores the frontal frames for printed photos and screens. Its score is recorded on every scan; it only blocks scans when `FACE_ANTISPOOF=enforce`, because it has not yet been calibrated on real phone and laptop cameras (on recompressed video it flags real faces).
 
 Failures count towards the same lockout as failed face matches, and are written to the audit log as `LIVENESS_FAILED`.
 
 ## Biometrics
 
-- Face recognition runs **in the browser** (face-api), producing 128-number descriptors from several quality-checked frames. Matching uses Euclidean distance with a threshold of 0.45, a consistency limit across frames, and an impostor margin over every other enrolled face.
-- **1:N checks use an in-memory face index** (`src/lib/faceIndex.ts`). The server keeps each voter's average face vector in memory (512 bytes per voter), searches the **entire** register exactly, then decrypts only the 10 closest full templates. This is used to block one face registering under two IDs and to reject a login when another voter matches as well as the claimed one. There is no cap on register size; the index catches up with new registrations every 2 seconds and rebuilds itself if voters are deleted. The vectors live only in server memory, never in the database unencrypted.
+- Face recognition runs **on the server** (`src/lib/faceEngine.ts`, ONNX Runtime): SCRFD-10GF finds the face and 5 keypoints, a similarity transform aligns it to the standard 112×112 ArcFace template, and ArcFace ResNet-50 (WebFace600K) produces a 512-number identity vector. A template is the average of three frontal frames plus the frames themselves. Matching uses cosine similarity: at least 0.40 to the claimed voter, and no other voter within 0.08 of that.
+- Measured on LFW (`scripts/benchmark-lfw.ts`, official 10-fold protocol): 99.85% verification accuracy; the most similar impostor pair of 3,000 scored 0.245, so the 0.40 threshold has a wide margin. InsightFace reports 90.3% true accepts on African faces at a one-in-a-million false-accept rate for this model, against 69.5% for the small mobile model.
+- **1:N checks use an in-memory face index** (`src/lib/faceIndex.ts`). The server keeps each voter's average face vector in memory (2 KB per voter), searches the **entire** register exactly, then decrypts only the 10 closest full templates. This is used to block one face registering under two IDs and to reject a login when another voter matches as well as the claimed one. There is no cap on register size; the index catches up with new registrations every 2 seconds and rebuilds itself if voters are deleted. The vectors live only in server memory, never in the database unencrypted.
 - Fingerprints use **WebAuthn**: the fingerprint stays on the voter's device, and the server only sees a signed challenge.
 - Biometric data is "sensitive personal data" under Kenya's Data Protection Act 2019. Any real deployment needs informed consent (parental consent for minors), a data-protection impact assessment and registration with the Office of the Data Protection Commissioner.
 
@@ -64,16 +66,20 @@ Changing `LEDGER_SECRET` or `BIOMETRIC_KEY` after an election has started makes 
 This is a prototype. Before any binding election it would need:
 
 - an **independent security audit** and penetration test;
-- **certified liveness detection** (ISO/IEC 30107). The current check runs in the browser, so it stops photos, screens and replayed videos, but a determined attacker who rewrites the web page's code could send fabricated telemetry. Production systems verify liveness from the video itself on the server or in a certified SDK;
+- **certified liveness detection** (ISO/IEC 30107). The moves are now checked by the server from the frames, which stops photos, screens and replayed videos held to the camera. But nothing proves the frames came from a real camera at that moment: an attacker who can generate convincing frames of the victim (for example a deepfake doing the moves) could send them directly. Certified systems add capture attestation and light-reflection challenges (the screen flashes random colours that must show up on the face);
+- **licensed face models**: the InsightFace detection and recognition weights are free for non-commercial research only (fine for this project); a real deployment needs a commercial licence or models trained on licensed data;
+- calibrating the passive anti-spoofing model on real voters' cameras before enforcing it;
 - protection against a compromised voter device (malware on the phone or browser);
 - a distributed rate limiter and liveness-token store (the current ones are per server instance);
-- for a national register (tens of millions), the face index split across servers (for example by county) or an approximate nearest-neighbour index, since one server holding everyone needs about 11 GB of memory;
+- for a national register (tens of millions), the face index split across servers (for example by county) or a compressed / approximate nearest-neighbour index, since one server holding everyone needs about 45 GB of memory;
 - operational procedures: key ceremonies, backups, observers and legal approval.
 
 ## Tests
 
 ```bash
-npx tsx scripts/security-test.ts      # 33 offline checks: seals, tamper attacks, encryption, face decisions, liveness, CSRF
+npx tsx scripts/security-test.ts      # 30 offline checks: seals, tamper attacks, encryption, face decisions, liveness tokens, CSRF
+LFW_DIR=... npx tsx scripts/face-engine-test.ts   # 13 checks on real photos: every way a face scan must be refused, real matching
+LFW_DIR=... npx tsx scripts/benchmark-lfw.ts      # accuracy on the LFW benchmark
 ```
 
 `scripts/e2e-election-test.ts` runs a full simulated election against a server on an isolated test database and writes [`scripts/e2e-results.json`](scripts/e2e-results.json).

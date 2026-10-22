@@ -51,3 +51,6 @@ next-env.d.ts
 # KSEF write-up and explainer video stay private; only screenshots are published
 /docs/*
 !/docs/screenshots/
+
+# Face model weights (research licence: fetched by scripts/fetch-face-models.ts, never committed)
+/ml-models/

@@ -1,6 +1,6 @@
 import { connectDB } from "@/lib/mongodb";
 import { decryptFaceTemplate, type FaceTemplateData } from "@/lib/biometricVault";
-import { DESCRIPTOR_LENGTH } from "@/lib/faceMath";
+import { EMBEDDING_LENGTH } from "@/lib/faceMath";
 import { Voter } from "@/models/Voter";
 
 /**
@@ -10,15 +10,17 @@ import { Voter } from "@/models/Voter";
  *
  * Before: every check downloaded and decrypted ALL templates (capped at 5,000),
  * so each login cost ~21 KB per voter of database traffic.
- * Now: the server keeps one 128-number average per voter in a flat Float32Array
- * (512 bytes each, ~0.5 GB per million voters), searches the whole register
- * exactly in memory, and fetches only the K closest full templates.
+ * Now: the server keeps one 512-number ArcFace average per voter in a flat Float32Array
+ * (2 KB each, ~2 GB per million voters), searches the whole register exactly in
+ * memory, and fetches only the K closest full templates. The vectors are unit length,
+ * so the nearest by distance are also the most similar by cosine. Legacy 128-number
+ * templates are not indexed (those voters must re-enrol).
  *
  * The index is built once, then catches up with new registrations every couple
  * of seconds. If voters are deleted or the database is reset, it rebuilds.
  */
 
-const D = DESCRIPTOR_LENGTH;
+const D = EMBEDDING_LENGTH;
 /** How many of the closest faces are checked with the full template. */
 export const NEAREST_K = 10;
 const REFRESH_MS = 2_000;
@@ -168,7 +170,7 @@ export async function closestTemplates(probeMean: number[], excludeId?: string, 
   return docs.flatMap((d) => decryptFaceTemplate(d.faceTemplate, d.idNumber) ?? []);
 }
 
-/** Average of several descriptors. */
-export function meanOf(probes: number[][]): number[] {
-  return probes[0].map((_, i) => probes.reduce((s, p) => s + p[i], 0) / probes.length);
+/** Is this voter's stored template from the current (512-number) engine? */
+export function isCurrentTemplate(t: FaceTemplateData | null): t is FaceTemplateData {
+  return !!t && t.mean.length === EMBEDDING_LENGTH;
 }

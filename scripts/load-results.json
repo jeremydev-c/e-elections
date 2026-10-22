@@ -1,29 +1,29 @@
 {
- "date": "2026-10-22T07:04:13.299Z",
+ "date": "2026-10-22T18:45:51.588Z",
  "setup": "Laptop running the production build; database on MongoDB Atlas (free tier) over the internet",
  "offlineOneToN": {
-  "bytesPerTemplate": 21202,
+  "bytesPerTemplate": 57337,
   "rows": [
    {
     "enrolled": 1000,
-    "decryptAndMatchMs": 606,
-    "bytesDownloaded": 21201496
+    "decryptAndMatchMs": 488,
+    "bytesDownloaded": 57340174
    },
    {
     "enrolled": 5000,
-    "decryptAndMatchMs": 1741,
-    "bytesDownloaded": 105999452
+    "decryptAndMatchMs": 2299,
+    "bytesDownloaded": 286688847
    },
    {
     "enrolled": 10000,
-    "decryptAndMatchMs": 4295,
-    "bytesDownloaded": 212015095
+    "decryptAndMatchMs": 4737,
+    "bytesDownloaded": 573372218
    }
   ],
   "projection": {
    "enrolled": 22120458,
-   "cpuSecondsPerLogin": 9500.7,
-   "gigabytesPerLogin": 469
+   "cpuSecondsPerLogin": 10478.5,
+   "gigabytesPerLogin": 1268.3
   },
   "oldCap": 5000
  },
@@ -32,29 +32,38 @@
   "rows": [
    {
     "enrolled": 10000,
-    "searchMs": 8,
-    "memoryMB": 5,
-    "bytesDownloaded": 212020
+    "searchMs": 7.8,
+    "memoryMB": 20,
+    "bytesDownloaded": 573370
    },
    {
     "enrolled": 100000,
-    "searchMs": 26.3,
-    "memoryMB": 51,
-    "bytesDownloaded": 212020
+    "searchMs": 103.9,
+    "memoryMB": 205,
+    "bytesDownloaded": 573370
    },
    {
     "enrolled": 1000000,
-    "searchMs": 176.8,
-    "memoryMB": 512,
-    "bytesDownloaded": 212020
+    "searchMs": 755.5,
+    "memoryMB": 2048,
+    "bytesDownloaded": 573370
    }
   ],
   "projection": {
    "enrolled": 22120458,
-   "searchMsPerLogin": 3911,
-   "memoryGB": 11.3,
-   "kilobytesPerLogin": 212
+   "searchMsPerLogin": 16712,
+   "memoryGB": 45.3,
+   "kilobytesPerLogin": 573
   }
+ },
+ "faceEngine": {
+  "scans": 40,
+  "msPerScan": {
+   "p50": 603,
+   "p95": 984,
+   "max": 2828
+  },
+  "scansPerMinutePerServer": 99
  },
  "live": {
   "registerSize": 60,
@@ -62,57 +71,51 @@
    {
     "simultaneousVoters": 5,
     "votesCast": 5,
-    "wallClockSeconds": 5.27,
-    "votesPerSecond": 0.95,
+    "wallClockSeconds": 4.15,
+    "votesPerSecond": 1.2,
     "totalMs": {
-     "p50": 4244,
-     "p95": 5269,
-     "max": 5269
+     "p50": 2744,
+     "p95": 4149,
+     "max": 4149
     },
     "stepP95Ms": {
      "lookup": 1094,
-     "liveness": 12,
-     "face": 2123,
-     "ballot": 183,
-     "cast": 2483
+     "ballot": 172,
+     "cast": 3213
     },
     "failures": {}
    },
    {
     "simultaneousVoters": 10,
     "votesCast": 10,
-    "wallClockSeconds": 6.45,
-    "votesPerSecond": 1.55,
+    "wallClockSeconds": 5.68,
+    "votesPerSecond": 1.76,
     "totalMs": {
-     "p50": 4234,
-     "p95": 6453,
-     "max": 6453
+     "p50": 3771,
+     "p95": 5676,
+     "max": 5676
     },
     "stepP95Ms": {
-     "lookup": 763,
-     "liveness": 19,
-     "face": 1238,
-     "ballot": 516,
-     "cast": 4614
+     "lookup": 835,
+     "ballot": 777,
+     "cast": 5069
     },
     "failures": {}
    },
    {
     "simultaneousVoters": 20,
     "votesCast": 20,
-    "wallClockSeconds": 16.58,
-    "votesPerSecond": 1.21,
+    "wallClockSeconds": 13.9,
+    "votesPerSecond": 1.44,
     "totalMs": {
-     "p50": 11155,
-     "p95": 16579,
-     "max": 16579
+     "p50": 8987,
+     "p95": 13899,
+     "max": 13899
     },
     "stepP95Ms": {
-     "lookup": 455,
-     "liveness": 35,
-     "face": 2117,
-     "ballot": 1127,
-     "cast": 13836
+     "lookup": 641,
+     "ballot": 465,
+     "cast": 13150
     },
     "failures": {}
    }
@@ -121,11 +124,11 @@
    "watchers": 30,
    "requests": 90,
    "errors": 0,
-   "requestsPerSecond": 15.6,
+   "requestsPerSecond": 15.9,
    "ms": {
-    "p50": 1763,
-    "p95": 2049,
-    "max": 2081
+    "p50": 1738,
+    "p95": 1981,
+    "max": 2020
    }
   }
  }

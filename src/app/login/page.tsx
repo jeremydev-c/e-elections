@@ -19,10 +19,9 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
-import { FaceCapture, type FaceCaptureResult, type LivenessChallenge } from "@/components/FaceCapture";
+import { FaceScan, preloadFaceScan, type Challenge, type FaceScanPayload } from "@/components/FaceScan";
 import { AwsFaceScan, type AwsSession } from "@/components/AwsFaceScan";
 import { useToast } from "@/components/Toast";
-import { preloadFaceApi } from "@/lib/face.client";
 
 type VoterProfile = {
   idNumber: string;
@@ -63,7 +62,7 @@ export default function VoterLoginPage() {
   const [webauthnOk] = useState(() => typeof window === "undefined" || browserSupportsWebAuthn());
 
   useEffect(() => {
-    preloadFaceApi().catch(() => {});
+    preloadFaceScan();
   }, []);
 
   function reset() {
@@ -119,25 +118,29 @@ export default function VoterLoginPage() {
   }
 
   // ---- Stage 2A: Face Recognition Unlock -----------------------------------
-  async function getLivenessChallenge(): Promise<LivenessChallenge> {
+  async function getLivenessChallenge(): Promise<Challenge> {
     if (!voter) throw new Error("Enter your National ID first.");
-    const { ok, data } = await postJSON<LivenessChallenge>("/api/auth/voter/liveness", { idNumber: voter.idNumber });
+    const { ok, data } = await postJSON<Challenge>("/api/auth/voter/liveness", { idNumber: voter.idNumber });
     if (!ok) throw new Error(data.error ?? "Could not start the liveness check.");
     return data;
   }
 
-  async function handleFace({ samples, liveness }: FaceCaptureResult) {
+  /** The server checks the frames (liveness moves, one person) and matches the face. */
+  async function handleFace({ liveness, frames, seconds }: FaceScanPayload) {
     if (!voter) return;
     setBusy(true);
     setError("");
     try {
       const { ok, data } = await postJSON<{ confidence?: number; hasVoted?: boolean }>("/api/auth/voter/face", {
         idNumber: voter.idNumber,
-        descriptors: samples,
         liveness,
+        frames,
       });
-      if (!ok) return onAuthError(data.error ?? "Face verification failed.", data.hasVoted);
-      onVerified(`Face matched (${data.confidence ?? 0}% confidence).`);
+      if (!ok) {
+        onAuthError(data.error ?? "Face verification failed.", data.hasVoted);
+        throw new Error(data.error ?? "Face verification failed.");
+      }
+      onVerified(`Face matched (${data.confidence ?? 0}% similarity, scanned in ${seconds} s).`);
     } finally {
       setBusy(false);
     }
@@ -369,7 +372,7 @@ export default function VoterLoginPage() {
                     {voter.faceProvider === "aws" ? (
                       <AwsFaceScan startSession={getAwsSession} onComplete={handleAwsFace} actionLabel="Verify Face" />
                     ) : (
-                      <FaceCapture onCapture={handleFace} actionLabel="Verify Face" requireLiveness livenessChallenge={getLivenessChallenge} />
+                      <FaceScan getChallenge={getLivenessChallenge} onScan={handleFace} actionLabel="Verify Face" />
                     )}
                     {busy && (
                       <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">

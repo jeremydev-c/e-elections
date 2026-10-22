@@ -1,18 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import {
-  FACE_MATCH_THRESHOLD,
-  IMPOSTOR_MARGIN,
-  PROBE_CONSISTENCY_LIMIT,
-  isValidSampleSet,
-  matchScore,
-  probeSpread,
-} from "@/lib/faceMath";
+import { FACE_MATCH_MIN, RIVAL_MARGIN, templateSimilarity } from "@/lib/faceMath";
 import { decryptFaceTemplate } from "@/lib/biometricVault";
 import { FACE_SIMILARITY_MIN, redeemLiveFace, searchFace } from "@/lib/awsFace";
-import { closestTemplates, meanOf } from "@/lib/faceIndex";
+import { faceModelsInstalled } from "@/lib/faceEngine";
+import { closestTemplates, isCurrentTemplate } from "@/lib/faceIndex";
+import { SCAN_MESSAGES, analyseScan, type ScanProblem } from "@/lib/faceScan";
 import { audit } from "@/lib/audit";
-import { verifyLiveness } from "@/lib/liveness";
 import { redeemChallenge } from "@/lib/livenessChallenge";
 import { alreadyVotedMessage } from "@/lib/positions";
 import { clearFailures, clientIp, lockedFor, recordFailure } from "@/lib/rateLimit";
@@ -20,30 +14,35 @@ import { ballotSessionResponse } from "@/lib/voterSession";
 import { Voter } from "@/models/Voter";
 import { Election, electionStatus } from "@/models/Election";
 
+/** Scan problems that are the voter's camera or light, not a failed identity check. */
+const QUALITY: ScanProblem[] = ["BAD_FRAMES", "NO_FACE", "TOO_SMALL", "NOT_FRONTAL", "BLURRY", "TOO_DARK", "TOO_BRIGHT"];
+/** Scan problems that mean the liveness check failed. */
+const NOT_LIVE: ScanProblem[] = ["MOVE_NOT_DONE", "DIFFERENT_PEOPLE", "SPOOF", "MULTIPLE_FACES"];
+
 /**
- * POST /api/auth/voter/face { idNumber, descriptors: number[3..8][128], liveness: { token, evidence } }
- * Stage 2A: matches a multi-frame live face reading against the enrolled voter.
+ * POST /api/auth/voter/face { idNumber, liveness: { token }, frames: [{ role, image }] }
+ * Stage 2A: face login, checked entirely on the server (lib/faceScan.ts).
  *
  * Accepted only if ALL of these hold:
- *   0. the liveness challenge (from /api/auth/voter/liveness) is genuine, unused,
- *      issued for this ID, and the evidence shows its moves done by this face,
- *   1. every live frame is the same face (spread < 0.55),
- *   2. the median distance to the enrolled template is < 0.45,
- *   3. no other registered voter matches as well or better (1:N check),
- * Five failures lock the ID for 5 minutes, and distances are never returned
- * on failure, so an attacker can't "hill-climb" a fake template.
+ *   0. the liveness challenge (from /api/auth/voter/liveness) is genuine, unused and
+ *      issued for this ID, and the camera frames show its moves (turns, blink) done
+ *      by one and the same live person,
+ *   1. the face matches the voter's enrolled template (cosine similarity >= 0.40),
+ *   2. no other registered voter comes within 0.08 of that score (1:N check).
+ * Five failures lock the ID for 5 minutes, and scores are never returned on failure,
+ * so an attacker can't "hill-climb" toward a template. Camera problems (dark, blurred,
+ * too far) don't count toward the lock, only toward a per-device limit.
  */
 export async function POST(req: NextRequest) {
   const b = await req.json().catch(() => ({}));
   const idNumber = String(b.idNumber ?? "").trim();
-  const probes: unknown = b.descriptors;
 
   if (!/^\d{7,8}$/.test(idNumber)) {
     return NextResponse.json({ error: "Invalid National ID number." }, { status: 400 });
   }
   if (b.awsTicket !== undefined) return verifyWithAws(req, idNumber, b.awsTicket);
-  if (!isValidSampleSet(probes)) {
-    return NextResponse.json({ error: "Incomplete face reading. Look straight at the camera and retry." }, { status: 400 });
+  if (!Array.isArray(b.frames)) {
+    return NextResponse.json({ error: "Incomplete face scan. Start the scan again." }, { status: 400 });
   }
 
   const key = `face:${idNumber}`;
@@ -54,6 +53,9 @@ export async function POST(req: NextRequest) {
       { error: `Too many failed face scans. Face Recognition is locked for ${wait}s. Try Fingerprint instead.` },
       { status: 429 }
     );
+  }
+  if (!faceModelsInstalled()) {
+    return NextResponse.json({ error: "Face recognition is not set up on this server. Use Fingerprint." }, { status: 503 });
   }
 
   await connectDB();
@@ -70,12 +72,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: alreadyVotedMessage(voter.idNumber, voter.votedAt), hasVoted: true }, { status: 403 });
   }
   const template = decryptFaceTemplate(voter.faceTemplate, voter.idNumber);
-  if (!template) {
-    if (voter.faceTemplate) {
+  if (!isCurrentTemplate(template)) {
+    if (voter.faceTemplate && !template) {
       await audit("FACE_MATCH_FAILED", { req, severity: "critical", idNumber, detail: "Encrypted face template failed to decrypt (tampered or swapped)" });
     }
     return NextResponse.json(
-      { error: "No face template is enrolled for this ID. Use Fingerprint or visit a registration desk." },
+      { error: "No face is enrolled for this ID with the current face system. Use Fingerprint or visit a registration desk." },
       { status: 400 }
     );
   }
@@ -93,7 +95,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error }, { status: 401 });
   };
 
-  // 0. Proof of a live person: the random moves of this login's challenge, done by this face.
+  // 0. The challenge, and the frames that prove its moves.
   const steps = await redeemChallenge(b.liveness?.token, idNumber);
   if (!steps) {
     return fail(
@@ -102,46 +104,40 @@ export async function POST(req: NextRequest) {
       "LIVENESS_FAILED"
     );
   }
-  const live = verifyLiveness(steps, b.liveness?.evidence, probes);
-  if (!live.ok) {
-    return fail(
-      "We could not confirm a live person. Follow the on-screen moves (turn, blink) and retry.",
-      live.reason,
-      "LIVENESS_FAILED"
-    );
+  const scan = await analyseScan(b.frames, steps);
+  if (!scan.ok) {
+    if (QUALITY.includes(scan.problem)) {
+      recordFailure(ipKey, 20, 10 * 60_000);
+      return NextResponse.json({ error: SCAN_MESSAGES[scan.problem], problem: scan.problem }, { status: 400 });
+    }
+    return fail(SCAN_MESSAGES[scan.problem], scan.detail, NOT_LIVE.includes(scan.problem) ? "LIVENESS_FAILED" : "FACE_MATCH_FAILED");
   }
 
-  // 1. All live frames must be one and the same face.
-  if (probeSpread(probes) > PROBE_CONSISTENCY_LIMIT) {
-    return fail(
-      "The camera saw more than one face during the scan. Make sure only you are in view and retry.",
-      "Inconsistent frames (possible face swap)"
-    );
-  }
-
-  // 2. Match against the claimed voter's enrolled template.
-  const score = matchScore(template, probes);
-  if (score >= FACE_MATCH_THRESHOLD) {
+  // 1. The claimed voter.
+  const score = templateSimilarity(template, scan.embedding);
+  if (score < FACE_MATCH_MIN) {
     return fail(
       "Face did not match the registered voter. Face a light, remove glasses or hats, and retry.",
-      "Face did not match the enrolled template"
+      `Face did not match the enrolled template (live ${scan.stats.liveScore})`
     );
   }
 
-  // 3. 1:N check: the claimed voter must be the clear best match on the register.
-  //    The in-memory face index searches every enrolled voter and returns the closest few.
-  const others = await closestTemplates(meanOf(probes), String(voter._id));
-  const rival = others.some((o) => matchScore(o, probes) < score + IMPOSTOR_MARGIN);
-  if (rival) {
+  // 2. 1:N: nobody else on the register may come close (the in-memory index finds the nearest few).
+  const others = await closestTemplates(scan.embedding, String(voter._id));
+  const rivalAt = Math.max(score - RIVAL_MARGIN, FACE_MATCH_MIN - 0.1);
+  if (others.some((o) => isCurrentTemplate(o) && templateSimilarity(o, scan.embedding) >= rivalAt)) {
     return fail(
       "This face is too close to another registered voter to confirm safely. Retry in better light.",
-      "Face matched another registered voter as well or better (1:N check)"
+      "Face matched another registered voter almost as well (1:N check)"
     );
   }
 
   clearFailures(key);
-  const confidence = Math.round(Math.max(0, 1 - score / FACE_MATCH_THRESHOLD) * 1000) / 10;
-  return ballotSessionResponse(voter, { method: "face", confidence, frames: probes.length });
+  return ballotSessionResponse(voter, {
+    method: "face",
+    confidence: Math.round(score * 1000) / 10,
+    scanMs: scan.stats.ms,
+  });
 }
 
 /**

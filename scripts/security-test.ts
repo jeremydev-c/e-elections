@@ -18,18 +18,18 @@ import {
 } from "../src/lib/hashChain";
 import { decryptFaceTemplate, encryptFaceTemplate } from "../src/lib/biometricVault";
 import {
-  FACE_MATCH_THRESHOLD,
-  IMPOSTOR_MARGIN,
-  PROBE_CONSISTENCY_LIMIT,
-  matchScore,
-  probeSpread,
+  FACE_MATCH_MIN,
+  RIVAL_MARGIN,
+  SAME_SCAN_MIN,
+  cosineSimilarity,
+  faceDistance,
+  meanEmbedding,
+  templateSimilarity,
 } from "../src/lib/faceMath";
-import { fuseDescriptors } from "../src/lib/face.client";
 import { proxy } from "../src/proxy";
-import { LIVENESS_STEPS, randomSteps, verifyLiveness, type LivenessStep, type LivenessStepEvidence } from "../src/lib/liveness";
+import { LIVENESS_STEPS, randomSteps } from "../src/lib/liveness";
 import { issueChallenge, redeemChallenge } from "../src/lib/livenessChallenge";
 import { FaceIndex } from "../src/lib/faceIndex";
-import { faceDistance } from "../src/lib/faceMath";
 
 let failed = 0;
 const check = (name: string, ok: boolean, extra = "") => {
@@ -94,7 +94,7 @@ const problems = (a: ReturnType<typeof verifyChain>) => a.issues.map((i) => `${i
 
 // ------------------------------------------------------------ encryption
 {
-  const t = { mean: Array.from({ length: 128 }, (_, i) => Math.sin(i) / 10), samples: [] as number[][] };
+  const t = { mean: Array.from({ length: 512 }, (_, i) => Math.sin(i) / 10), samples: [] as number[][] };
   const blob = encryptFaceTemplate(t, "27310001");
   check("Template is not stored in plaintext", !blob.includes("0.0") && blob.startsWith("v1."));
   check("Owner can decrypt their template", decryptFaceTemplate(blob, "27310001")?.mean[5] === t.mean[5]);
@@ -104,44 +104,46 @@ const problems = (a: ReturnType<typeof verifyChain>) => a.issues.map((i) => `${i
 }
 
 // ---------------------------------------------------------- face matching
+// Synthetic 512-number identity vectors that behave like the ArcFace engine: two frames of one
+// person ~0.7 alike, a lookalike ~0.55, unrelated people ~0. (Real faces: scripts/benchmark-lfw.ts.)
+let vseed = 7;
+const vrand = () => ((vseed = (vseed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
+const unit = (v: number[]) => {
+  const n = Math.hypot(...v);
+  return v.map((x) => x / n);
+};
+const person = () => unit(Array.from({ length: 512 }, vrand));
+const near = (p: number[], noise: number) => unit(p.map((x) => x + vrand() * noise));
 {
-  let seed = 7;
-  const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
-  const unit = (v: number[]) => {
-    const n = Math.hypot(...v);
-    return v.map((x) => x / n);
-  };
-  // Each person is a point; each camera frame adds a little noise (≈0.25 apart frame to frame).
-  const person = () => unit(Array.from({ length: 128 }, rand)).map((x) => x * 0.95);
-  const frame = (p: number[]) => p.map((x) => x + rand() * 0.032);
-  const lookalike = (p: number[]) => p.map((x) => x + rand() * 0.045);
-  const reading = (p: number[], n = 5) => Array.from({ length: n }, () => frame(p));
+  const frame = (p: number[]) => near(p, 0.06);
   const enroll = (p: number[]) => {
-    const fused = fuseDescriptors(reading(p).map((d) => Float32Array.from(d)));
-    return { mean: fused.mean, samples: fused.kept };
+    const samples = [frame(p), frame(p), frame(p)];
+    return { mean: meanEmbedding(samples), samples };
   };
+  const scan = (p: number[]) => meanEmbedding([frame(p), frame(p), frame(p)]);
 
   const alice = person();
   const bob = person();
-  const aliceTwin = lookalike(alice);
+  const aliceTwin = near(alice, 0.075);
   const tAlice = enroll(alice);
   const tTwin = enroll(aliceTwin);
 
-  const genuine = matchScore(tAlice, reading(alice));
-  check("Genuine voter matches", genuine < FACE_MATCH_THRESHOLD, `score ${genuine.toFixed(3)}`);
+  const genuine = templateSimilarity(tAlice, scan(alice));
+  check("Genuine voter matches", genuine >= FACE_MATCH_MIN, `similarity ${genuine.toFixed(3)}`);
 
-  const impostor = matchScore(tAlice, reading(bob));
-  check("Different person rejected", impostor >= FACE_MATCH_THRESHOLD, `score ${impostor.toFixed(3)}`);
+  const impostor = templateSimilarity(tAlice, scan(bob));
+  check("Different person rejected", impostor < FACE_MATCH_MIN, `similarity ${impostor.toFixed(3)}`);
 
-  const twinProbe = reading(aliceTwin);
-  const twinAsAlice = matchScore(tAlice, twinProbe);
-  const twinAsSelf = matchScore(tTwin, twinProbe);
-  const caughtByOneToN = twinAsAlice >= FACE_MATCH_THRESHOLD || twinAsSelf < twinAsAlice + IMPOSTOR_MARGIN;
+  const twinProbe = scan(aliceTwin);
+  const twinAsAlice = templateSimilarity(tAlice, twinProbe);
+  const twinAsSelf = templateSimilarity(tTwin, twinProbe);
+  const caughtByOneToN = twinAsAlice < FACE_MATCH_MIN || twinAsSelf >= Math.max(twinAsAlice - RIVAL_MARGIN, FACE_MATCH_MIN - 0.1);
   check("Lookalike claiming Alice's ID blocked (threshold or 1:N)", caughtByOneToN, `vs Alice ${twinAsAlice.toFixed(3)}, vs self ${twinAsSelf.toFixed(3)}`);
 
-  const mixed = [...reading(alice, 2), ...reading(bob, 3)];
-  check("Mixed faces in one scan rejected", probeSpread(mixed) > PROBE_CONSISTENCY_LIMIT, `spread ${probeSpread(mixed).toFixed(3)}`);
-  check("Single-person scan is consistent", probeSpread(reading(alice)) <= PROBE_CONSISTENCY_LIMIT, `spread ${probeSpread(reading(alice)).toFixed(3)}`);
+  const mixed = cosineSimilarity(frame(alice), frame(bob));
+  check("Frames of two people in one scan are told apart", mixed < SAME_SCAN_MIN, `similarity ${mixed.toFixed(3)}`);
+  const same = cosineSimilarity(frame(alice), frame(alice));
+  check("Frames of one person agree", same >= SAME_SCAN_MIN, `similarity ${same.toFixed(3)}`);
 }
 
 // ------------------------------------------------------------------ proxy
@@ -158,52 +160,9 @@ const problems = (a: ReturnType<typeof verifyChain>) => a.issues.map((i) => `${i
   check("GET always allowed", status(proxy(req("GET", { origin: "https://evil.example" }))) === "next");
 }
 
-// --------------------------------------------------------------- liveness
+// --------------------------------------------------------------- liveness challenge
+// (The moves themselves are checked from real camera frames: scripts/face-engine-test.ts.)
 async function livenessTests() {
-  let seed = 11;
-  const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
-  const unit = (v: number[]) => v.map((x) => x / Math.hypot(...v));
-  const person = () => unit(Array.from({ length: 128 }, rand)).map((x) => x * 0.95);
-  const frontal = (p: number[]) => Array.from({ length: 5 }, () => p.map((x) => x + rand() * 0.032));
-  const posed = (p: number[]) => p.map((x) => x + rand() * 0.05); // turned or blinking: a bit further off
-  const alice = person();
-  const bob = person();
-
-  // Telemetry for each move, one reading every 70 ms (about what the browser records).
-  let t = 1000;
-  const frames = (values: [number, number][]) => values.map(([yaw, ear]) => ({ t: (t += 70), yaw, ear }));
-  const move: Record<LivenessStep, () => [number, number][]> = {
-    TURN_LEFT: () => [[1, 0.3], [4, 0.3], [9, 0.3], [15, 0.3], [19, 0.3]],
-    TURN_RIGHT: () => [[18, 0.3], [6, 0.3], [-3, 0.3], [-11, 0.3], [-17, 0.3]],
-    BLINK: () => [[0, 0.31], [0, 0.3], [0, 0.12], [0, 0.1], [0, 0.29], [0, 0.31]],
-  };
-  const evidence = (steps: LivenessStep[], who = alice) => ({
-    steps: steps.map((step): LivenessStepEvidence => ({ step, frames: frames(move[step]()), descriptor: posed(who) })),
-  });
-  const order: LivenessStep[] = ["BLINK", "TURN_LEFT", "TURN_RIGHT"];
-  const face = frontal(alice);
-
-  check("Live person doing the moves passes", verifyLiveness(order, evidence(order), face).ok);
-  check("Moves in the wrong order rejected", !verifyLiveness(order, evidence(["TURN_LEFT", "BLINK", "TURN_RIGHT"]), face).ok);
-
-  const photo = evidence(order);
-  photo.steps[1].frames = frames([[20, 0.3], [20, 0.3], [20, 0.3], [20, 0.3], [20, 0.3]]);
-  check("Photo held at an angle (no real turn) rejected", !verifyLiveness(order, photo, face).ok);
-
-  const noBlink = evidence(order);
-  noBlink.steps[0].frames = frames([[0, 0.3], [0, 0.3], [0, 0.29], [0, 0.31], [0, 0.3], [0, 0.3]]);
-  check("Eyes that never close rejected", !verifyLiveness(order, noBlink, face).ok);
-
-  const tooFast = evidence(order);
-  tooFast.steps[1].frames = tooFast.steps[1].frames.map((f, i) => ({ ...f, t: tooFast.steps[1].frames[0].t + i * 10 }));
-  check("Moves faster than humanly possible rejected", !verifyLiveness(order, tooFast, face).ok);
-
-  const swapped = evidence(order);
-  swapped.steps[2].descriptor = posed(bob);
-  check("Someone else doing a move rejected", !verifyLiveness(order, swapped, face).ok);
-
-  check("Missing evidence rejected", !verifyLiveness(order, undefined, face).ok);
-
   const c = await issueChallenge("27310001");
   check("Challenge token redeems once", (await redeemChallenge(c.token, "27310001"))?.join() === c.steps.join());
   check("Replayed challenge token rejected", (await redeemChallenge(c.token, "27310001")) === null);
@@ -218,11 +177,6 @@ async function livenessTests() {
 
 // ------------------------------------------------------------- face index (1:N)
 {
-  let seed = 23;
-  const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
-  const unit = (v: number[]) => v.map((x) => x / Math.hypot(...v));
-  const person = () => unit(Array.from({ length: 128 }, rand)).map((x) => x * 0.95);
-
   const faces = Array.from({ length: 3000 }, person);
   const index = new FaceIndex();
   faces.forEach((f, i) => index.add(`v${i}`, f));
@@ -230,7 +184,7 @@ async function livenessTests() {
 
   let agree = 0;
   for (let q = 0; q < 25; q++) {
-    const probe = faces[q * 37].map((x) => x + rand() * 0.05);
+    const probe = near(faces[q * 37], 0.06);
     const brute = faces
       .map((f, i) => ({ id: `v${i}`, d: faceDistance(f, probe) }))
       .sort((x, y) => x.d - y.d)
@@ -241,9 +195,9 @@ async function livenessTests() {
   }
   check("Index finds exactly the same 10 closest faces as checking everyone", agree === 25, `${agree}/25 queries`);
 
-  const twin = faces[500].map((x) => x + rand() * 0.045);
+  const twin = near(faces[500], 0.075);
   index.add("twin", twin);
-  const hits = index.nearest(twin.map((x) => x + rand() * 0.03), 3, "v500").map((n) => n.id);
+  const hits = index.nearest(near(twin, 0.03), 3, "v500").map((n) => n.id);
   check("Lookalike found among 3,000 voters (claimed voter excluded)", hits[0] === "twin" && !hits.includes("v500"), hits.join(","));
 
   index.add("v7", faces[8]);

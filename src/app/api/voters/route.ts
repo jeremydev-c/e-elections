@@ -5,17 +5,12 @@ import { getAdmin } from "@/lib/session";
 import { getConstituency, getCounty, getWard, isValidRegion } from "@/lib/regions";
 import { hashPassword } from "@/lib/password";
 import { pinProblem } from "@/lib/pin";
-import {
-  FACE_MATCH_THRESHOLD,
-  PROBE_CONSISTENCY_LIMIT,
-  faceDistance,
-  isValidDescriptor,
-  isValidSampleSet,
-  matchScore,
-  probeSpread,
-} from "@/lib/faceMath";
+import { FACE_MATCH_MIN, templateSimilarity } from "@/lib/faceMath";
 import { encryptFaceTemplate, encryptPhoto } from "@/lib/biometricVault";
-import { closestTemplates, indexVoter } from "@/lib/faceIndex";
+import { faceModelsInstalled } from "@/lib/faceEngine";
+import { closestTemplates, indexVoter, isCurrentTemplate } from "@/lib/faceIndex";
+import { SCAN_MESSAGES, analyseScan } from "@/lib/faceScan";
+import { redeemChallenge } from "@/lib/livenessChallenge";
 import { enrollFace, redeemLiveFace, removeFace, searchFace } from "@/lib/awsFace";
 import { Types } from "mongoose";
 import { Voter } from "@/models/Voter";
@@ -78,7 +73,7 @@ export async function POST(req: NextRequest) {
   const idNumber = String(b.idNumber ?? "").trim();
   const fullName = String(b.fullName ?? "").trim().replace(/\s+/g, " ");
   const phoneMatch = String(b.phone ?? "").replace(/[\s-]/g, "").match(PHONE_RE);
-  const { countyCode, constituencyCode, wardCode, faceDescriptor, faceSamples, photoDataUrl } = b;
+  const { countyCode, constituencyCode, wardCode } = b;
   const pin = String(b.pin ?? "");
   const viaAws = b.awsTicket !== undefined;
 
@@ -90,13 +85,8 @@ export async function POST(req: NextRequest) {
     errors.push("Select a valid County, Constituency and Ward.");
   if (viaAws) {
     if (typeof b.awsTicket !== "string") errors.push("A completed face scan is required.");
-  } else if (!isValidDescriptor(faceDescriptor) || !isValidSampleSet(faceSamples)) {
-    errors.push("A complete multi-frame face scan is required.");
-  } else if (
-    probeSpread(faceSamples) > PROBE_CONSISTENCY_LIMIT ||
-    faceSamples.some((s) => faceDistance(s, faceDescriptor) > 0.4)
-  ) {
-    errors.push("The face scan was inconsistent (more than one face?). Please rescan.");
+  } else if (!Array.isArray(b.frames) || typeof b.liveness?.token !== "string") {
+    errors.push("A complete face scan is required.");
   }
   // USSD PIN is optional until the *2027# feature launches.
   const pinError = pin ? pinProblem(pin) : null;
@@ -121,10 +111,24 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // The face scan, checked on the server: liveness moves, one person, quality.
+  if (!faceModelsInstalled()) {
+    return NextResponse.json({ error: "Face recognition is not set up on this server (run scripts/fetch-face-models.ts)." }, { status: 503 });
+  }
+  const steps = await redeemChallenge(b.liveness.token, idNumber);
+  if (!steps) {
+    return NextResponse.json({ error: "The face scan expired or was already used. Scan again." }, { status: 400 });
+  }
+  const scan = await analyseScan(b.frames, steps);
+  if (!scan.ok) {
+    await audit("LIVENESS_FAILED", { req, severity: "warning", actor: admin.username, idNumber, detail: `Registration scan: ${scan.detail}` });
+    return NextResponse.json({ error: SCAN_MESSAGES[scan.problem], problem: scan.problem }, { status: 400 });
+  }
+
   // One person, one registration: reject a face that is already enrolled
   // under a different ID number (checked against the closest faces on the whole register).
-  const nearest = await closestTemplates(faceDescriptor);
-  const duplicate = nearest.some((t) => matchScore(t, faceSamples) < FACE_MATCH_THRESHOLD);
+  const nearest = await closestTemplates(scan.embedding);
+  const duplicate = nearest.some((t) => isCurrentTemplate(t) && templateSimilarity(t, scan.embedding) >= FACE_MATCH_MIN);
   if (duplicate) {
     await audit("DUPLICATE_FACE_BLOCKED", { req, severity: "warning", actor: admin.username, idNumber, detail: "Face already enrolled under another ID" });
     return NextResponse.json(
@@ -134,8 +138,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const photoOk =
-      typeof photoDataUrl === "string" && photoDataUrl.startsWith("data:image/") && photoDataUrl.length < 300_000;
+    const photoDataUrl = scan.photo;
+    const photoOk = photoDataUrl.length < 300_000;
     const voter = await Voter.create({
       idNumber,
       fullName,
@@ -146,11 +150,11 @@ export async function POST(req: NextRequest) {
       countyCode,
       constituencyCode,
       wardCode,
-      faceTemplate: encryptFaceTemplate({ mean: faceDescriptor, samples: faceSamples }, idNumber),
+      faceTemplate: encryptFaceTemplate({ mean: scan.embedding, samples: scan.frontEmbeddings }, idNumber),
       photoEnc: photoOk ? encryptPhoto(photoDataUrl, idNumber) : undefined,
       ussdPinHash: pin ? await hashPassword(pin) : undefined,
     });
-    indexVoter(String(voter._id), faceDescriptor);
+    indexVoter(String(voter._id), scan.embedding);
     await audit("VOTER_REGISTERED", { req, actor: admin.username, idNumber, detail: `${voter.ward} Ward, ${voter.county}` });
     return NextResponse.json(
       {

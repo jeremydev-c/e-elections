@@ -19,7 +19,7 @@ E-ELECTIONS shows how voting could be **cheaper, faster, accessible from anywher
 ## How it works
 
 1. **Identify.** The voter enters their National ID. Anyone who has already voted is stopped here.
-2. **Verify.** Face recognition (a random liveness challenge, then five quality-checked camera frames compared on 128-point face descriptors) **or** the device's fingerprint sensor through WebAuthn. The fingerprint never leaves the phone.
+2. **Verify.** A face scan (look at the camera, then three random moves: about 5 seconds) checked entirely **on the server** with ArcFace, the face model behind leading research systems, **or** the device's fingerprint sensor through WebAuthn. The fingerprint never leaves the phone.
 3. **Vote from anywhere.** The voter automatically gets the ballot for their own county, constituency and ward, plus the presidential race: six seats, as in a Kenyan general election.
 4. **Sealed receipt.** The ballot is stored with no name or ID, chained to the previous ballot by SHA-256 and sealed with an HMAC. The voter gets an anonymous receipt code to check later.
 5. **Live results.** Results are recomputed from the verified ledger and refresh every 3 seconds, by county, constituency and ward.
@@ -37,8 +37,8 @@ Feature phones are supported too: a `*2027#` **USSD** gateway (Africa's Talking 
 - **Tamper-evident ledger:** each ballot carries the SHA-256 hash of the one before it, plus a server HMAC seal whose key never touches the database. Change, delete or reorder one ballot and the chain breaks; rewriting the whole chain is caught by the seals.
 - **One voter, one ballot:** the check-and-cast happens in a single atomic database transaction, so simultaneous attempts cannot slip a second ballot through.
 - **Biometrics encrypted at rest:** face templates use AES-256-GCM, bound to the voter's ID, so encrypted faces cannot be swapped between records (Kenya Data Protection Act 2019 treats biometrics as sensitive data).
-- **Strict face matching:** a distance threshold of 0.45 (stricter than the usual 0.6), consistency checks across frames, and a one-to-many check against the whole register (via an in-memory face index) so lookalikes are rejected.
-- **Liveness check:** every face login gets a random order of moves (turn left, turn right, blink) in a single-use token, so photos, screens and pre-recorded videos are rejected.
+- **Server-side face recognition:** the browser only sends camera frames; the server detects the face (SCRFD), aligns it on 5 points and turns it into a 512-number identity vector (ArcFace ResNet-50, trained on WebFace600K, chosen for its accuracy on African faces). **99.85% on the LFW benchmark** (10-fold), and 0 false accepts in 3,000 impostor pairs at the threshold used. A one-to-many check against the whole register (in-memory face index) rejects lookalikes and double registrations.
+- **Liveness check:** every scan gets a random order of moves (turn left, turn right, blink) in a single-use token. The server checks the frames itself: the head really turned the right way, the eyes really closed, and it was one person throughout. A passive anti-spoofing model also scores every scan for photos and screens.
 - **Ballot secrecy:** the ledger holds no names or IDs, and the time a person voted is stored only to the hour.
 - **Web hardening:** CSRF protection, a Content-Security-Policy, rate limiting with lockouts against brute force, and a security audit log.
 
@@ -48,19 +48,21 @@ Full details: [SECURITY.md](SECURITY.md).
 
 | Test | Result |
 |---|---|
-| Automated security suite (`scripts/security-test.ts`) | **33 / 33 passed** |
+| Automated security suite (`scripts/security-test.ts`) | **30 / 30 passed** |
+| Face engine on real photos (`scripts/face-engine-test.ts`) | **13 / 13 passed** |
+| Face verification accuracy, LFW 6,000 pairs (`scripts/benchmark-lfw.ts`) | **99.85%** (± 0.17); 0 / 3,000 false accepts at the app's threshold |
+| Server time for one face scan (6 frames, laptop) | ≈ 0.6 s |
 | Simulated election: voters registered | 70 / 70 |
-| Impostor face attempts rejected | 12 / 12 (0% false accepts) |
 | Double-voting attempts blocked | 30 / 30 |
 | Simultaneous duplicate ballots | 10 accepted of 30 submitted (1 per voter) |
 | Receipts verified against the ledger | 70 / 70 |
-| Average time to vote (lookup → face → ballot → cast) | ≈ 2 seconds of server time |
+| Brute-force face logins | locked after 5 failures |
 
-Simulated results use generated 128-point face descriptors; real camera tests are done with people separately. Raw results: [`scripts/e2e-results.json`](scripts/e2e-results.json).
+The election simulation stands in for the face match with the signed session the server issues after one (the server refuses simulated faces); face checking is tested on real photos. Raw results: [`scripts/e2e-results.json`](scripts/e2e-results.json), [`scripts/lfw-results.json`](scripts/lfw-results.json).
 
 ## Tech stack
 
-Next.js 16 (App Router), React 19, TypeScript, MongoDB with Mongoose, `@vladmandic/face-api` (face recognition in the browser), SimpleWebAuthn (fingerprint / passkeys), `jose` (sessions), Tailwind CSS, Recharts.
+Next.js 16 (App Router), React 19, TypeScript, MongoDB with Mongoose, ONNX Runtime (server face engine: SCRFD, ArcFace, MiniFASNet), Google MediaPipe (camera guidance in the browser), SimpleWebAuthn (fingerprint / passkeys), `jose` (sessions), Tailwind CSS, Recharts.
 
 ## Run it locally
 
@@ -71,6 +73,7 @@ git clone https://github.com/jeremydev-c/e-elections.git
 cd e-elections
 npm install
 cp .env.example .env.local      # then fill in MONGODB_URI and SESSION_SECRET
+npx tsx scripts/fetch-face-models.ts   # face models (~200 MB, checksummed) into ml-models/
 npm run seed                    # demo regions, candidates and an admin account
 npm run dev                     # http://localhost:3000
 ```
@@ -90,7 +93,8 @@ src/app/          pages (vote, verify, ballot, results, register, setup) and API
 src/lib/          hash chain, ledger, biometric vault, face maths, WebAuthn, rate limiting, audit log
 src/models/       MongoDB models (Voter, Candidate, VoteLedger, Election, AuditLog)
 scripts/          seeding, admin reset, security tests, end-to-end election test
-public/models/    face-api model weights
+public/mediapipe/ camera face tracker (MediaPipe, self-hosted)
+ml-models/        server face models (downloaded, not in the repository)
 data/             Kenya counties, constituencies and wards
 ```
 
