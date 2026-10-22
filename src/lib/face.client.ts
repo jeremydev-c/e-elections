@@ -42,6 +42,7 @@ export function loadFaceApi(): Promise<FaceApi> {
         faceapi.nets.faceRecognitionNet.loadFromUri("/models"),
       ]);
 
+      await warmUp(faceapi);
       modelsLoaded = true;
       return faceapi;
     })().catch((err) => {
@@ -51,6 +52,39 @@ export function loadFaceApi(): Promise<FaceApi> {
     });
   }
   return apiPromise;
+}
+
+/**
+ * Runs every network once on a blank image so WebGL compiles its shaders now,
+ * in the background, instead of during the voter's first scan (~0.5 s saved).
+ */
+async function warmUp(faceapi: FaceApi) {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 160;
+    canvas.height = 160;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "#8a7a6a";
+      ctx.fillRect(0, 0, 160, 160);
+    }
+    await faceapi.detectAllFaces(canvas, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }));
+    await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 320 }));
+    await faceapi.nets.faceLandmark68Net.detectLandmarks(canvas);
+    await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(canvas);
+  } catch {
+    // Warm-up is only an optimisation.
+  }
+}
+
+/** Eye aspect ratio (both eyes averaged) from the 68 landmarks: drops sharply when the eyes close. */
+export function eyeAspectRatio(landmarks: Array<{ x: number; y: number }>): number {
+  const dist = (p1: { x: number; y: number }, p2: { x: number; y: number }) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+  const left =
+    (dist(landmarks[37], landmarks[41]) + dist(landmarks[38], landmarks[40])) / (2 * Math.max(1, dist(landmarks[36], landmarks[39])));
+  const right =
+    (dist(landmarks[43], landmarks[47]) + dist(landmarks[44], landmarks[46])) / (2 * Math.max(1, dist(landmarks[42], landmarks[45])));
+  return (left + right) / 2;
 }
 
 export type PoseEstimate = {
@@ -248,15 +282,7 @@ export async function analyzeLiveFrame(
   else if (widthRatio > 0.75) distanceStatus = "TOO_CLOSE";
 
   // 3. Eye Aspect Ratio (EAR) for blink detection
-  const dist = (p1: { x: number; y: number }, p2: { x: number; y: number }) =>
-    Math.hypot(p1.x - p2.x, p1.y - p2.y);
-  const leftEAR =
-    (dist(landmarks[37], landmarks[41]) + dist(landmarks[38], landmarks[40])) /
-    (2 * Math.max(1, dist(landmarks[36], landmarks[39])));
-  const rightEAR =
-    (dist(landmarks[43], landmarks[47]) + dist(landmarks[44], landmarks[46])) /
-    (2 * Math.max(1, dist(landmarks[42], landmarks[45])));
-  const avgEAR = (leftEAR + rightEAR) / 2;
+  const avgEAR = eyeAspectRatio(landmarks);
   const isBlinking = avgEAR < 0.16;
 
   return {
@@ -532,7 +558,8 @@ export type QualityIssue =
   | "NOT_FRONTAL"
   | "TOO_DARK"
   | "TOO_BRIGHT"
-  | "BLURRY";
+  | "BLURRY"
+  | "EYES_CLOSED";
 
 export const QUALITY_HINTS: Record<QualityIssue, string> = {
   NO_FACE: "Looking for your face…",
@@ -543,7 +570,11 @@ export const QUALITY_HINTS: Record<QualityIssue, string> = {
   TOO_DARK: "Too dark — face a window or a light",
   TOO_BRIGHT: "Too bright — move away from the strong light",
   BLURRY: "Hold still — the image is blurry",
+  EYES_CLOSED: "Keep your eyes open and look at the camera",
 };
+
+/** Below this eye aspect ratio the eyes are (nearly) closed: such frames make a poorer face template. */
+const EYES_OPEN_MIN_EAR = 0.17;
 
 /** Brightness (0-255) and sharpness (variance of the Laplacian) of the face area. */
 function faceImageStats(video: HTMLVideoElement, box: Box): { brightness: number; sharpness: number } {
@@ -601,6 +632,7 @@ export async function captureQualitySample(
   if (r.detection.score < 0.8) return { issue: "LOW_CONFIDENCE" };
   if (box.width / (video.videoWidth || 640) < 0.16) return { issue: "TOO_SMALL" };
   if (!estimatePoseFromLandmarks(r.landmarks.positions).isFullyFrontal) return { issue: "NOT_FRONTAL" };
+  if (eyeAspectRatio(r.landmarks.positions) < EYES_OPEN_MIN_EAR) return { issue: "EYES_CLOSED" };
 
   const { brightness, sharpness } = faceImageStats(video, box);
   if (brightness < 45) return { issue: "TOO_DARK" };
@@ -616,7 +648,7 @@ export async function collectFaceSamples(
   faceapi: FaceApi,
   {
     count = 5,
-    timeoutMs = 9000,
+    timeoutMs = 6000,
     onProgress,
   }: { count?: number; timeoutMs?: number; onProgress?: (got: number, issue?: QualityIssue) => void } = {}
 ): Promise<FaceSample[]> {
@@ -626,7 +658,8 @@ export async function collectFaceSamples(
     const { sample, issue } = await captureQualitySample(video, faceapi);
     if (sample) samples.push(sample);
     onProgress?.(samples.length, issue);
-    await new Promise((r) => setTimeout(r, 110)); // spread readings over natural micro-movements
+    // Each reading already takes a few hundred ms, which spreads them over natural micro-movements.
+    await new Promise((r) => setTimeout(r, 40));
   }
   return samples;
 }

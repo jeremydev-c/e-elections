@@ -2,7 +2,8 @@
  * Load test: how E-ELECTIONS behaves as the register and the traffic grow.
  *
  *   Part 1 (offline, no network): the cost of the 1:N face check for one login,
- *          as the number of enrolled voters grows, extrapolated to Kenya's register.
+ *          as the number of enrolled voters grows, extrapolated to Kenya's register:
+ *          first downloading every template (the old way), then with the face index.
  *   Part 2 (live): many voters doing the full flow at the same time (ID check →
  *          liveness → face → ballot → cast), and many people watching live results.
  *
@@ -26,6 +27,7 @@ import { connectDB } from "../src/lib/mongodb";
 import { seedDatabase } from "../src/lib/seed";
 import { decryptFaceTemplate, encryptFaceTemplate } from "../src/lib/biometricVault";
 import { matchScore } from "../src/lib/faceMath";
+import { FaceIndex, NEAREST_K } from "../src/lib/faceIndex";
 import { fuseDescriptors } from "../src/lib/face.client";
 import { getConstituency, getCounty, getWard } from "../src/lib/regions";
 import { Voter } from "../src/models/Voter";
@@ -33,6 +35,7 @@ import { Voter } from "../src/models/Voter";
 const BASE = process.env.E2E_BASE ?? "http://localhost:3005";
 const KENYA_REGISTER = 22_120_458; // registered voters, 2022 General Election (IEBC)
 const OFFLINE_SIZES = [1_000, 5_000, 10_000];
+const INDEX_SIZES = [10_000, 100_000, 1_000_000];
 const REGISTER = 60; // voters enrolled for the live part
 const WAVES = [5, 10, 20]; // voters going through the whole flow at the same moment
 const RESULT_WATCHERS = 30; // people refreshing live results at the same moment
@@ -118,7 +121,34 @@ function offlineOneToN() {
     gigabytesPerLogin: round((bytesPerTemplate * KENYA_REGISTER) / 1e9, 1),
   };
   console.log(`  Projected for ${KENYA_REGISTER.toLocaleString()} voters: ${projection.cpuSecondsPerLogin} s CPU and ${projection.gigabytesPerLogin} GB per login`);
-  return { bytesPerTemplate: round(bytesPerTemplate), rows, projection, currentCap: 5000 };
+  return { bytesPerTemplate: round(bytesPerTemplate), rows, projection, oldCap: 5000 };
+}
+
+/** The same 1:N check with the in-memory face index: search everyone, fetch only the K closest templates. */
+function offlineIndex(bytesPerTemplate: number) {
+  console.log("\nPart 1b: 1:N with the in-memory face index (offline)");
+  const rows: { enrolled: number; searchMs: number; memoryMB: number; bytesDownloaded: number }[] = [];
+  const index = new FaceIndex();
+  let added = 0;
+  for (const n of INDEX_SIZES) {
+    for (; added < n; added++) index.add(`v${added}`, newFace());
+    const probes = Array.from({ length: 10 }, () => newFace());
+    const t0 = performance.now();
+    for (const p of probes) index.nearest(p, NEAREST_K);
+    const searchMs = ms(t0) / probes.length;
+    const row = { enrolled: n, searchMs: round(searchMs, 1), memoryMB: round((n * 128 * 4) / 1e6), bytesDownloaded: Math.round(NEAREST_K * bytesPerTemplate) };
+    rows.push(row);
+    console.log(`  ${n.toLocaleString()} enrolled: ${row.searchMs} ms search, ${row.memoryMB} MB in memory, ${(row.bytesDownloaded / 1e3).toFixed(0)} KB fetched per login`);
+  }
+  const last = rows[rows.length - 1];
+  const projection = {
+    enrolled: KENYA_REGISTER,
+    searchMsPerLogin: round((last.searchMs * KENYA_REGISTER) / last.enrolled),
+    memoryGB: round((KENYA_REGISTER * 128 * 4) / 1e9, 1),
+    kilobytesPerLogin: round(last.bytesDownloaded / 1e3),
+  };
+  console.log(`  Projected for ${KENYA_REGISTER.toLocaleString()} voters: ${projection.searchMsPerLogin} ms search on one server, ${projection.memoryGB} GB memory, ${projection.kilobytesPerLogin} KB per login`);
+  return { k: NEAREST_K, rows, projection };
 }
 
 // ------------------------------------------------------------------ part 2: live load
@@ -240,11 +270,13 @@ async function liveLoad() {
 
 async function main() {
   const offline = offlineOneToN();
+  const indexed = offlineIndex(offline.bytesPerTemplate);
   const live = await liveLoad();
   const out = {
     date: new Date().toISOString(),
     setup: "Laptop running the production build; database on MongoDB Atlas (free tier) over the internet",
     offlineOneToN: offline,
+    offlineFaceIndex: indexed,
     live,
   };
   fs.writeFileSync(path.resolve(__dirname, "load-results.json"), JSON.stringify(out, null, 1));

@@ -44,6 +44,7 @@ Failures count towards the same lockout as failed face matches, and are written 
 ## Biometrics
 
 - Face recognition runs **in the browser** (face-api), producing 128-number descriptors from several quality-checked frames. Matching uses Euclidean distance with a threshold of 0.45, a consistency limit across frames, and an impostor margin over every other enrolled face.
+- **1:N checks use an in-memory face index** (`src/lib/faceIndex.ts`). The server keeps each voter's average face vector in memory (512 bytes per voter), searches the **entire** register exactly, then decrypts only the 10 closest full templates. This is used to block one face registering under two IDs and to reject a login when another voter matches as well as the claimed one. There is no cap on register size; the index catches up with new registrations every 2 seconds and rebuilds itself if voters are deleted. The vectors live only in server memory, never in the database unencrypted.
 - Fingerprints use **WebAuthn**: the fingerprint stays on the voter's device, and the server only sees a signed challenge.
 - Biometric data is "sensitive personal data" under Kenya's Data Protection Act 2019. Any real deployment needs informed consent (parental consent for minors), a data-protection impact assessment and registration with the Office of the Data Protection Commissioner.
 
@@ -65,7 +66,8 @@ This is a prototype. Before any binding election it would need:
 - an **independent security audit** and penetration test;
 - **certified liveness detection** (ISO/IEC 30107). The current check runs in the browser, so it stops photos, screens and replayed videos, but a determined attacker who rewrites the web page's code could send fabricated telemetry. Production systems verify liveness from the video itself on the server or in a certified SDK;
 - protection against a compromised voter device (malware on the phone or browser);
-- a distributed rate limiter (the current one is per server instance);
+- a distributed rate limiter and liveness-token store (the current ones are per server instance);
+- for a national register (tens of millions), the face index split across servers (for example by county) or an approximate nearest-neighbour index, since one server holding everyone needs about 11 GB of memory;
 - operational procedures: key ceremonies, backups, observers and legal approval.
 
 ## Tests

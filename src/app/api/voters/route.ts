@@ -14,7 +14,8 @@ import {
   matchScore,
   probeSpread,
 } from "@/lib/faceMath";
-import { encryptFaceTemplate, encryptPhoto, enrolledTemplates } from "@/lib/biometricVault";
+import { encryptFaceTemplate, encryptPhoto } from "@/lib/biometricVault";
+import { closestTemplates, indexVoter } from "@/lib/faceIndex";
 import { Voter } from "@/models/Voter";
 
 const ID_RE = /^\d{7,8}$/;
@@ -104,9 +105,9 @@ export async function POST(req: NextRequest) {
   }
 
   // One person, one registration: reject a face that is already enrolled
-  // under a different ID number.
-  const enrolled = await enrolledTemplates();
-  const duplicate = enrolled.some((t) => matchScore(t, faceSamples) < FACE_MATCH_THRESHOLD);
+  // under a different ID number (checked against the closest faces on the whole register).
+  const nearest = await closestTemplates(faceDescriptor);
+  const duplicate = nearest.some((t) => matchScore(t, faceSamples) < FACE_MATCH_THRESHOLD);
   if (duplicate) {
     await audit("DUPLICATE_FACE_BLOCKED", { req, severity: "warning", actor: admin.username, idNumber, detail: "Face already enrolled under another ID" });
     return NextResponse.json(
@@ -132,6 +133,7 @@ export async function POST(req: NextRequest) {
       photoEnc: photoOk ? encryptPhoto(photoDataUrl, idNumber) : undefined,
       ussdPinHash: pin ? await hashPassword(pin) : undefined,
     });
+    indexVoter(String(voter._id), faceDescriptor);
     await audit("VOTER_REGISTERED", { req, actor: admin.username, idNumber, detail: `${voter.ward} Ward, ${voter.county}` });
     return NextResponse.json(
       {

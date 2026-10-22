@@ -47,6 +47,8 @@ export type FaceCaptureResult = {
   photoDataUrl?: string;
   /** Present when a server liveness challenge was completed: send it with the face reading. */
   liveness?: { token: string; evidence: LivenessEvidence };
+  /** Seconds from pressing the scan button to a finished reading. */
+  seconds?: number;
 };
 
 export type LivenessChallenge = { token: string; steps: LivenessStep[] };
@@ -63,7 +65,7 @@ type Status =
   | { kind: "loading"; msg: string }
   | { kind: "live" }
   | { kind: "capturing"; stage: GuidedStage; progress: number }
-  | { kind: "done"; photoUrl: string; frames: number }
+  | { kind: "done"; photoUrl: string; frames: number; seconds?: number }
   | { kind: "error"; msg: string };
 
 export function FaceCapture({
@@ -106,8 +108,10 @@ export function FaceCapture({
     index: number;
     frames: LivenessFrame[];
     evidence: LivenessStepEvidence[];
-    reading: boolean;
+    /** Face readings taken during each move; they finish in the background while the next move starts. */
+    readings: Promise<Float32Array | null>[];
   } | null>(null);
+  const scanStartRef = useRef(0);
   const [challengeStep, setChallengeStep] = useState<{ step: LivenessStep; index: number; total: number } | null>(null);
 
   const stopCamera = useCallback(() => {
@@ -473,35 +477,28 @@ export function FaceCapture({
     // --- STAGE 2 (server challenge): the random moves, recorded as evidence ---
     else if (stage === "CHALLENGE") {
       const challenge = challengeRef.current;
-      if (!challenge || challenge.reading) return;
+      if (!challenge) return;
       const step = challenge.steps[challenge.index];
       challenge.frames.push({ t: Math.round(now * 10) / 10, yaw: data.yaw, ear: data.ear });
       if (challenge.frames.length > LIVENESS.MAX_FRAMES_PER_STEP - 10) challenge.frames.shift();
       if (!stepSatisfied(step, challenge.frames)) return;
 
-      // Move detected: take one face reading right now, so the server can check it was this face.
-      challenge.reading = true;
-      computeDescriptorFromVideo(video, api, false)
-        .then((descriptor) => {
-          challenge.reading = false;
-          if (!descriptor || challengeRef.current !== challenge) return;
-          challenge.evidence.push({ step, frames: challenge.frames, descriptor: Array.from(descriptor) });
-          challenge.frames = [];
-          challenge.index += 1;
-          playBiometricSound("step");
-          if (challenge.index < challenge.steps.length) {
-            const nextStep = challenge.steps[challenge.index];
-            setChallengeStep({ step: nextStep, index: challenge.index, total: challenge.steps.length });
-            setProgress(challenge.index / challenge.steps.length);
-            setHudMessage(`Liveness ${challenge.index + 1}/${challenge.steps.length}: ${STEP_PROMPTS[nextStep]}`);
-          } else {
-            setChallengeStep(null);
-            goToStage("FINALIZE", "Live person confirmed ✓ Now face FULLY FRONT");
-          }
-        })
-        .catch(() => {
-          challenge.reading = false;
-        });
+      // Move detected: take a face reading of this very frame (so the server can check it was this
+      // face) and go straight on to the next move while it is computed in the background.
+      challenge.readings.push(computeDescriptorFromVideo(video, api, false).catch(() => null));
+      challenge.evidence.push({ step, frames: challenge.frames, descriptor: [] });
+      challenge.frames = [];
+      challenge.index += 1;
+      playBiometricSound("step");
+      if (challenge.index < challenge.steps.length) {
+        const nextStep = challenge.steps[challenge.index];
+        setChallengeStep({ step: nextStep, index: challenge.index, total: challenge.steps.length });
+        setProgress(challenge.index / challenge.steps.length);
+        setHudMessage(`Liveness ${challenge.index + 1}/${challenge.steps.length}: ${STEP_PROMPTS[nextStep]}`);
+      } else {
+        setChallengeStep(null);
+        goToStage("FINALIZE", "Live person confirmed ✓ Now face FULLY FRONT");
+      }
     }
 
     // --- STAGE 2: LIVENESS HEAD ROTATION CHALLENGE (Anti-Spoofing) ---
@@ -560,15 +557,41 @@ export function FaceCapture({
       result = { ...result, liveness: { token: challenge.token, evidence: { steps: challenge.evidence } } };
     }
     challengeRef.current = null;
+    const seconds = scanStartRef.current ? Math.round((performance.now() - scanStartRef.current) / 100) / 10 : undefined;
+    result = { ...result, seconds };
     playBiometricSound("success");
     stopCamera();
-    setStatus({ kind: "done", photoUrl: result.photoDataUrl ?? "", frames: result.samples.length });
+    setStatus({ kind: "done", photoUrl: result.photoDataUrl ?? "", frames: result.samples.length, seconds });
     onCapture(result);
+  }
+
+  /** Waits for the face readings taken during the liveness moves; false if any move had no readable face. */
+  async function settleLivenessReadings(): Promise<boolean> {
+    const challenge = challengeRef.current;
+    if (!challenge) return true;
+    const readings = await Promise.all(challenge.readings);
+    readings.forEach((d, i) => {
+      if (d) challenge.evidence[i].descriptor = Array.from(d);
+    });
+    return readings.every(Boolean);
   }
 
   // Final stage of the guided scan
   async function completeBiometricEnrollment(video: HTMLVideoElement, api: typeof import("@vladmandic/face-api")) {
-    const result = await captureFusedReading(video, api).catch(() => null);
+    const [result, movesReadable] = await Promise.all([
+      captureFusedReading(video, api).catch(() => null),
+      settleLivenessReadings(),
+    ]);
+    if (!movesReadable) {
+      // A move's face reading failed (face left the frame mid-turn): redo the liveness moves.
+      completingRef.current = false;
+      isCapturingRef.current = false;
+      setIsCapturing(false);
+      challengeRef.current = null;
+      playBiometricSound("error");
+      setHudMessage("We lost your face during a move. Press the button to try again, keeping your face in the frame.");
+      return;
+    }
     if (!result) {
       completingRef.current = false;
       playBiometricSound("error");
@@ -582,6 +605,7 @@ export function FaceCapture({
 
   // Manual trigger for "Start Guided Scan"
   async function startGuidedScan() {
+    scanStartRef.current = performance.now();
     completingRef.current = false;
     challengeRef.current = null;
     setChallengeStep(null);
@@ -589,7 +613,7 @@ export function FaceCapture({
       setHudMessage("Preparing your liveness check…");
       try {
         const c = await livenessChallenge();
-        challengeRef.current = { token: c.token, steps: c.steps, index: 0, frames: [], evidence: [], reading: false };
+        challengeRef.current = { token: c.token, steps: c.steps, index: 0, frames: [], evidence: [], readings: [] };
       } catch (err) {
         setHudMessage((err as Error).message || "Could not start the liveness check. Try again.");
         playBiometricSound("error");
@@ -615,6 +639,7 @@ export function FaceCapture({
       return;
     }
 
+    scanStartRef.current = performance.now();
     completingRef.current = true;
     isCapturingRef.current = true;
     setIsCapturing(true);
@@ -723,6 +748,7 @@ export function FaceCapture({
                 </span>
                 <p className="mt-2 text-xs text-ink-soft">
                   {status.frames} quality-checked frames fused into one 128-point reading
+                  {status.seconds !== undefined && <> · scanned in {status.seconds} s</>}
                 </p>
               </div>
             </div>

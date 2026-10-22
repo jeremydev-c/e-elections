@@ -28,6 +28,8 @@ import { fuseDescriptors } from "../src/lib/face.client";
 import { proxy } from "../src/proxy";
 import { LIVENESS_STEPS, randomSteps, verifyLiveness, type LivenessStep, type LivenessStepEvidence } from "../src/lib/liveness";
 import { issueChallenge, redeemChallenge } from "../src/lib/livenessChallenge";
+import { FaceIndex } from "../src/lib/faceIndex";
+import { faceDistance } from "../src/lib/faceMath";
 
 let failed = 0;
 const check = (name: string, ok: boolean, extra = "") => {
@@ -212,6 +214,40 @@ async function livenessTests() {
   const seen = new Set<string>();
   for (let i = 0; i < 300; i++) seen.add(randomSteps((max) => Math.floor(Math.random() * max)).join());
   check("All 6 move orders are used", seen.size === 6 && [...seen].every((o) => o.split(",").length === LIVENESS_STEPS.length), `${seen.size} orders`);
+}
+
+// ------------------------------------------------------------- face index (1:N)
+{
+  let seed = 23;
+  const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
+  const unit = (v: number[]) => v.map((x) => x / Math.hypot(...v));
+  const person = () => unit(Array.from({ length: 128 }, rand)).map((x) => x * 0.95);
+
+  const faces = Array.from({ length: 3000 }, person);
+  const index = new FaceIndex();
+  faces.forEach((f, i) => index.add(`v${i}`, f));
+  check("Index holds every voter (no 5,000-style cap, grows past its first block)", index.size === 3000, `${index.size}`);
+
+  let agree = 0;
+  for (let q = 0; q < 25; q++) {
+    const probe = faces[q * 37].map((x) => x + rand() * 0.05);
+    const brute = faces
+      .map((f, i) => ({ id: `v${i}`, d: faceDistance(f, probe) }))
+      .sort((x, y) => x.d - y.d)
+      .slice(0, 10)
+      .map((x) => x.id)
+      .join();
+    if (index.nearest(probe, 10).map((n) => n.id).join() === brute) agree++;
+  }
+  check("Index finds exactly the same 10 closest faces as checking everyone", agree === 25, `${agree}/25 queries`);
+
+  const twin = faces[500].map((x) => x + rand() * 0.045);
+  index.add("twin", twin);
+  const hits = index.nearest(twin.map((x) => x + rand() * 0.03), 3, "v500").map((n) => n.id);
+  check("Lookalike found among 3,000 voters (claimed voter excluded)", hits[0] === "twin" && !hits.includes("v500"), hits.join(","));
+
+  index.add("v7", faces[8]);
+  check("Re-enrolling a voter updates their entry instead of duplicating it", index.size === 3001 && index.nearest(faces[8], 2).map((n) => n.id).sort().join() === "v7,v8");
 }
 
 livenessTests().then(() => {

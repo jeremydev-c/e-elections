@@ -1,6 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { biometricKey } from "@/lib/secrets";
-import { Voter } from "@/models/Voter";
 
 /**
  * Encryption at rest for biometric data (Kenya Data Protection Act 2019:
@@ -54,16 +53,4 @@ export function decryptFaceTemplate(blob: string | null | undefined, idNumber: s
 
 export function encryptPhoto(dataUrl: string, idNumber: string): string {
   return seal(Buffer.from(dataUrl), idNumber);
-}
-
-/** Decrypted templates of every enrolled voter except `excludeId` (for 1:N checks). */
-export async function enrolledTemplates(excludeId?: unknown): Promise<FaceTemplateData[]> {
-  const docs = await Voter.find(
-    { faceTemplate: { $exists: true }, ...(excludeId ? { _id: { $ne: excludeId } } : {}) },
-    { idNumber: 1, faceTemplate: 1 }
-  )
-    .select("+faceTemplate")
-    .limit(5000)
-    .lean();
-  return docs.flatMap((d) => decryptFaceTemplate(d.faceTemplate, d.idNumber) ?? []);
 }

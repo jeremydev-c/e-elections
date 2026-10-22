@@ -1,31 +1,60 @@
 {
- "date": "2026-10-21T21:12:25.434Z",
+ "date": "2026-10-22T07:04:13.299Z",
  "setup": "Laptop running the production build; database on MongoDB Atlas (free tier) over the internet",
  "offlineOneToN": {
   "bytesPerTemplate": 21202,
   "rows": [
    {
     "enrolled": 1000,
-    "decryptAndMatchMs": 221,
+    "decryptAndMatchMs": 606,
     "bytesDownloaded": 21201496
    },
    {
     "enrolled": 5000,
-    "decryptAndMatchMs": 960,
+    "decryptAndMatchMs": 1741,
     "bytesDownloaded": 105999452
    },
    {
     "enrolled": 10000,
-    "decryptAndMatchMs": 1845,
+    "decryptAndMatchMs": 4295,
     "bytesDownloaded": 212015095
    }
   ],
   "projection": {
    "enrolled": 22120458,
-   "cpuSecondsPerLogin": 4081.2,
+   "cpuSecondsPerLogin": 9500.7,
    "gigabytesPerLogin": 469
   },
-  "currentCap": 5000
+  "oldCap": 5000
+ },
+ "offlineFaceIndex": {
+  "k": 10,
+  "rows": [
+   {
+    "enrolled": 10000,
+    "searchMs": 8,
+    "memoryMB": 5,
+    "bytesDownloaded": 212020
+   },
+   {
+    "enrolled": 100000,
+    "searchMs": 26.3,
+    "memoryMB": 51,
+    "bytesDownloaded": 212020
+   },
+   {
+    "enrolled": 1000000,
+    "searchMs": 176.8,
+    "memoryMB": 512,
+    "bytesDownloaded": 212020
+   }
+  ],
+  "projection": {
+   "enrolled": 22120458,
+   "searchMsPerLogin": 3911,
+   "memoryGB": 11.3,
+   "kilobytesPerLogin": 212
+  }
  },
  "live": {
   "registerSize": 60,
@@ -33,57 +62,57 @@
    {
     "simultaneousVoters": 5,
     "votesCast": 5,
-    "wallClockSeconds": 6.47,
-    "votesPerSecond": 0.77,
+    "wallClockSeconds": 5.27,
+    "votesPerSecond": 0.95,
     "totalMs": {
-     "p50": 4421,
-     "p95": 6473,
-     "max": 6473
+     "p50": 4244,
+     "p95": 5269,
+     "max": 5269
     },
     "stepP95Ms": {
-     "lookup": 1291,
-     "liveness": 38,
-     "face": 4598,
-     "ballot": 194,
-     "cast": 1580
+     "lookup": 1094,
+     "liveness": 12,
+     "face": 2123,
+     "ballot": 183,
+     "cast": 2483
     },
     "failures": {}
    },
    {
     "simultaneousVoters": 10,
     "votesCast": 10,
-    "wallClockSeconds": 9.15,
-    "votesPerSecond": 1.09,
+    "wallClockSeconds": 6.45,
+    "votesPerSecond": 1.55,
     "totalMs": {
-     "p50": 6838,
-     "p95": 9154,
-     "max": 9154
+     "p50": 4234,
+     "p95": 6453,
+     "max": 6453
     },
     "stepP95Ms": {
-     "lookup": 1151,
-     "liveness": 22,
-     "face": 5699,
-     "ballot": 213,
-     "cast": 3794
+     "lookup": 763,
+     "liveness": 19,
+     "face": 1238,
+     "ballot": 516,
+     "cast": 4614
     },
     "failures": {}
    },
    {
     "simultaneousVoters": 20,
     "votesCast": 20,
-    "wallClockSeconds": 21.98,
-    "votesPerSecond": 0.91,
+    "wallClockSeconds": 16.58,
+    "votesPerSecond": 1.21,
     "totalMs": {
-     "p50": 17063,
-     "p95": 21975,
-     "max": 21975
+     "p50": 11155,
+     "p95": 16579,
+     "max": 16579
     },
     "stepP95Ms": {
-     "lookup": 465,
-     "liveness": 30,
-     "face": 10044,
-     "ballot": 5366,
-     "cast": 13322
+     "lookup": 455,
+     "liveness": 35,
+     "face": 2117,
+     "ballot": 1127,
+     "cast": 13836
     },
     "failures": {}
    }
@@ -92,11 +121,11 @@
    "watchers": 30,
    "requests": 90,
    "errors": 0,
-   "requestsPerSecond": 16.4,
+   "requestsPerSecond": 15.6,
    "ms": {
-    "p50": 1682,
-    "p95": 1849,
-    "max": 1914
+    "p50": 1763,
+    "p95": 2049,
+    "max": 2081
    }
   }
  }

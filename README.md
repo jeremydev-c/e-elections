@@ -37,7 +37,7 @@ Feature phones are supported too: a `*2027#` **USSD** gateway (Africa's Talking 
 - **Tamper-evident ledger:** each ballot carries the SHA-256 hash of the one before it, plus a server HMAC seal whose key never touches the database. Change, delete or reorder one ballot and the chain breaks; rewriting the whole chain is caught by the seals.
 - **One voter, one ballot:** the check-and-cast happens in a single atomic database transaction, so simultaneous attempts cannot slip a second ballot through.
 - **Biometrics encrypted at rest:** face templates use AES-256-GCM, bound to the voter's ID, so encrypted faces cannot be swapped between records (Kenya Data Protection Act 2019 treats biometrics as sensitive data).
-- **Strict face matching:** a distance threshold of 0.45 (stricter than the usual 0.6), consistency checks across frames, and a one-to-many check so lookalikes are rejected.
+- **Strict face matching:** a distance threshold of 0.45 (stricter than the usual 0.6), consistency checks across frames, and a one-to-many check against the whole register (via an in-memory face index) so lookalikes are rejected.
 - **Liveness check:** every face login gets a random order of moves (turn left, turn right, blink) in a single-use token, so photos, screens and pre-recorded videos are rejected.
 - **Ballot secrecy:** the ledger holds no names or IDs, and the time a person voted is stored only to the hour.
 - **Web hardening:** CSRF protection, a Content-Security-Policy, rate limiting with lockouts against brute force, and a security audit log.

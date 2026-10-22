@@ -8,7 +8,8 @@ import {
   matchScore,
   probeSpread,
 } from "@/lib/faceMath";
-import { decryptFaceTemplate, enrolledTemplates } from "@/lib/biometricVault";
+import { decryptFaceTemplate } from "@/lib/biometricVault";
+import { closestTemplates, meanOf } from "@/lib/faceIndex";
 import { audit } from "@/lib/audit";
 import { verifyLiveness } from "@/lib/liveness";
 import { redeemChallenge } from "@/lib/livenessChallenge";
@@ -126,7 +127,8 @@ export async function POST(req: NextRequest) {
   }
 
   // 3. 1:N check: the claimed voter must be the clear best match on the register.
-  const others = await enrolledTemplates(voter._id);
+  //    The in-memory face index searches every enrolled voter and returns the closest few.
+  const others = await closestTemplates(meanOf(probes), String(voter._id));
   const rival = others.some((o) => matchScore(o, probes) < score + IMPOSTOR_MARGIN);
   if (rival) {
     return fail(
