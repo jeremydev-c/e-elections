@@ -21,6 +21,10 @@ import {
 } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
 import { FaceCapture, type FaceCaptureResult } from "@/components/FaceCapture";
+import { AwsFaceScan, type AwsSession } from "@/components/AwsFaceScan";
+
+/** "aws": faces are checked and stored by AWS Rekognition while our own engine is improved. */
+const FACE_PROVIDER = process.env.NEXT_PUBLIC_FACE_PROVIDER === "aws" ? "aws" : "local";
 import { useToast } from "@/components/Toast";
 import { preloadFaceApi } from "@/lib/face.client";
 import { COUNTIES, getCounty, getWard } from "@/lib/regions";
@@ -312,6 +316,24 @@ function RegistrationWizard() {
     }
   }
 
+  async function submitAwsFace(ticket: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const r = await api<Registered>("/api/voters", {
+        method: "POST",
+        body: JSON.stringify({ ...form, awsTicket: ticket }),
+      });
+      setRegistered(r);
+      toast.success("Voter registered", `${r.fullName} saved to the central register.`);
+      setStep(3);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function enrollPasskey(attachment: "platform" | "any" = "platform") {
     if (!registered) return;
     setBusy(true);
@@ -571,7 +593,15 @@ function RegistrationWizard() {
                   {form.fullName} · ID {form.idNumber} · {ward?.name}, {constituency?.name}, {county?.name}
                 </p>
               </div>
-              <FaceCapture onCapture={submitFace} actionLabel="Capture & Enroll" />
+              {FACE_PROVIDER === "aws" ? (
+                <AwsFaceScan
+                  startSession={() => api<AwsSession>("/api/face/aws-session", { method: "POST", body: JSON.stringify({ purpose: "enroll" }) })}
+                  onComplete={submitAwsFace}
+                  actionLabel="Capture & Enroll"
+                />
+              ) : (
+                <FaceCapture onCapture={submitFace} actionLabel="Capture & Enroll" />
+              )}
               {busy && (
                 <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">
                   <Loader2 className="size-4 animate-spin text-forest" aria-hidden /> Saving voter to central registry…

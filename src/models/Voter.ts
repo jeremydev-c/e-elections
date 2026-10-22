@@ -32,6 +32,9 @@ const voterSchema = new Schema(
     faceTemplate: { type: String, select: false, default: undefined },
     // Enrollment photo, encrypted the same way.
     photoEnc: { type: String, select: false, default: undefined },
+    // Face id in the AWS Rekognition collection, when enrolled through AWS
+    // (see lib/awsFace.ts). AWS holds the face vector, tagged with this record's _id.
+    awsFaceId: { type: String, select: false, default: undefined },
 
     // Primary WebAuthn credential ("Fingerprint Unlock"). The full public
     // keys needed to verify a fingerprint assertion live in `passkeys`.

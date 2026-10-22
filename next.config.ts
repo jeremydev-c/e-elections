@@ -3,6 +3,14 @@ import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV !== "production";
 
+// AWS Face Liveness (NEXT_PUBLIC_FACE_PROVIDER=aws) downloads its face model from
+// AWS's CDN and streams the camera to Rekognition in the configured region.
+const awsRegion = process.env.AWS_REGION || "us-east-1";
+const awsLiveness =
+  process.env.NEXT_PUBLIC_FACE_PROVIDER === "aws"
+    ? ` https://cdn.liveness.rekognition.amazonaws.com wss://streaming-rekognition.${awsRegion}.amazonaws.com https://streaming-rekognition.${awsRegion}.amazonaws.com`
+    : "";
+
 /**
  * Content Security Policy: only this origin may run scripts, load data or
  * frame the app. 'unsafe-eval' is needed by Next.js hot reload in dev only;
@@ -14,7 +22,7 @@ const csp = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  `connect-src 'self'${isDev ? " ws: wss:" : ""}`,
+  `connect-src 'self'${awsLiveness}${isDev ? " ws: wss:" : ""}`,
   "media-src 'self' blob: mediastream:",
   "worker-src 'self' blob:",
   "object-src 'none'",

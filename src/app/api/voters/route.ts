@@ -16,6 +16,8 @@ import {
 } from "@/lib/faceMath";
 import { encryptFaceTemplate, encryptPhoto } from "@/lib/biometricVault";
 import { closestTemplates, indexVoter } from "@/lib/faceIndex";
+import { enrollFace, redeemLiveFace, removeFace, searchFace } from "@/lib/awsFace";
+import { Types } from "mongoose";
 import { Voter } from "@/models/Voter";
 
 const ID_RE = /^\d{7,8}$/;
@@ -78,6 +80,7 @@ export async function POST(req: NextRequest) {
   const phoneMatch = String(b.phone ?? "").replace(/[\s-]/g, "").match(PHONE_RE);
   const { countyCode, constituencyCode, wardCode, faceDescriptor, faceSamples, photoDataUrl } = b;
   const pin = String(b.pin ?? "");
+  const viaAws = b.awsTicket !== undefined;
 
   const errors: string[] = [];
   if (!ID_RE.test(idNumber)) errors.push("National ID must be 7–8 digits.");
@@ -85,7 +88,9 @@ export async function POST(req: NextRequest) {
   if (!phoneMatch) errors.push("Enter a valid Kenyan phone number (e.g. 0712 345 678).");
   if (!isValidRegion(String(countyCode), String(constituencyCode), String(wardCode)))
     errors.push("Select a valid County, Constituency and Ward.");
-  if (!isValidDescriptor(faceDescriptor) || !isValidSampleSet(faceSamples)) {
+  if (viaAws) {
+    if (typeof b.awsTicket !== "string") errors.push("A completed face scan is required.");
+  } else if (!isValidDescriptor(faceDescriptor) || !isValidSampleSet(faceSamples)) {
     errors.push("A complete multi-frame face scan is required.");
   } else if (
     probeSpread(faceSamples) > PROBE_CONSISTENCY_LIMIT ||
@@ -102,6 +107,18 @@ export async function POST(req: NextRequest) {
 
   if (await Voter.exists({ idNumber })) {
     return NextResponse.json({ error: "This National ID is already registered." }, { status: 409 });
+  }
+
+  if (viaAws) {
+    return registerWithAws(req, admin.username, b.awsTicket, {
+      idNumber,
+      fullName,
+      phone: `+254${phoneMatch![1]}`,
+      countyCode,
+      constituencyCode,
+      wardCode,
+      pin,
+    });
   }
 
   // One person, one registration: reject a face that is already enrolled
@@ -153,5 +170,83 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "This National ID is already registered." }, { status: 409 });
     }
     throw err;
+  }
+}
+
+type NewVoter = {
+  idNumber: string;
+  fullName: string;
+  phone: string;
+  countyCode: string;
+  constituencyCode: string;
+  wardCode: string;
+  pin: string;
+};
+
+/**
+ * Registration with the face checked by AWS Rekognition (NEXT_PUBLIC_FACE_PROVIDER=aws):
+ * the official's AWS Face Liveness check must have passed, the face must not
+ * already be on the register, and it is then added to the AWS collection.
+ */
+async function registerWithAws(req: NextRequest, officialUsername: string, ticket: string, v: NewVoter) {
+  let faceId: string | null = null;
+  try {
+    const live = await redeemLiveFace(ticket, "enroll", officialUsername);
+    if (!live.ok) {
+      await audit("LIVENESS_FAILED", { req, severity: "warning", actor: officialUsername, idNumber: v.idNumber, detail: live.reason });
+      return NextResponse.json({ error: "The face scan did not confirm a live person. Please rescan." }, { status: 400 });
+    }
+
+    // One person, one registration, checked against every face on the register.
+    if ((await searchFace(live.image)).length) {
+      await audit("DUPLICATE_FACE_BLOCKED", { req, severity: "warning", actor: officialUsername, idNumber: v.idNumber, detail: "Face already enrolled under another ID (AWS)" });
+      return NextResponse.json({ error: "This face is already registered under another National ID." }, { status: 409 });
+    }
+
+    const voterId = new Types.ObjectId();
+    faceId = await enrollFace(live.image, String(voterId));
+    if (!faceId) {
+      return NextResponse.json({ error: "The photo was not clear enough to enrol. Rescan in good light." }, { status: 400 });
+    }
+
+    const photoDataUrl = `data:image/jpeg;base64,${Buffer.from(live.image).toString("base64")}`;
+    const photoOk = photoDataUrl.length < 300_000;
+    const voter = await Voter.create({
+      _id: voterId,
+      idNumber: v.idNumber,
+      fullName: v.fullName,
+      phone: v.phone,
+      county: getCounty(v.countyCode)!.name,
+      constituency: getConstituency(v.constituencyCode)!.name,
+      ward: getWard(v.wardCode)!.name,
+      countyCode: v.countyCode,
+      constituencyCode: v.constituencyCode,
+      wardCode: v.wardCode,
+      awsFaceId: faceId,
+      photoEnc: photoOk ? encryptPhoto(photoDataUrl, v.idNumber) : undefined,
+      ussdPinHash: v.pin ? await hashPassword(v.pin) : undefined,
+    });
+    await audit("VOTER_REGISTERED", { req, actor: officialUsername, idNumber: v.idNumber, detail: `${voter.ward} Ward, ${voter.county} (AWS face)` });
+    return NextResponse.json(
+      {
+        voterId: String(voter._id),
+        fullName: v.fullName,
+        idNumber: v.idNumber,
+        phone: voter.phone,
+        countyCode: v.countyCode,
+        constituencyCode: v.constituencyCode,
+        wardCode: v.wardCode,
+        photoDataUrl: photoOk ? photoDataUrl : undefined,
+      },
+      { status: 201 }
+    );
+  } catch (err) {
+    // Never leave a face in AWS without a voter record behind it.
+    if (faceId) await removeFace(faceId).catch(() => {});
+    if ((err as { code?: number }).code === 11000) {
+      return NextResponse.json({ error: "This National ID is already registered." }, { status: 409 });
+    }
+    console.error("AWS registration failed:", (err as Error).name, (err as Error).message);
+    return NextResponse.json({ error: "The face service is not responding. Try again in a moment." }, { status: 502 });
   }
 }

@@ -28,6 +28,21 @@
       "port": 3005
     },
     {
+      "name": "e-elections-aws-check",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "next",
+        "start",
+        "-p",
+        "3005"
+      ],
+      "env": {
+        "MONGODB_DB": "e_elections_test",
+        "NEXT_PUBLIC_FACE_PROVIDER": "aws"
+      },
+      "port": 3005
+    },
+    {
       "name": "portfolio-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": [

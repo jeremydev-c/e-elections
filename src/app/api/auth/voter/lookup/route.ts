@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
   }
 
   const voter = await Voter.findOne({ idNumber })
-    .select("+passkeys +faceTemplate")
+    .select("+passkeys +faceTemplate +awsFaceId")
     .lean();
 
   if (!voter) {
@@ -80,7 +80,9 @@ export async function POST(req: NextRequest) {
       countyCode: voter.countyCode,
       constituencyCode: voter.constituencyCode,
       wardCode: voter.wardCode,
-      hasFace: !!voter.faceTemplate,
+      hasFace: !!(voter.faceTemplate || voter.awsFaceId),
+      // Which engine enrolled this face: the login page opens the matching scanner.
+      faceProvider: voter.awsFaceId ? "aws" : voter.faceTemplate ? "local" : null,
       hasPasskey: Array.isArray(voter.passkeys) && voter.passkeys.length > 0,
     },
   });

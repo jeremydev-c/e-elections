@@ -12,9 +12,13 @@
     "reset-admin": "tsx scripts/reset-admin.ts"
   },
   "dependencies": {
+    "@aws-amplify/ui-react-liveness": "^3.7.0",
+    "@aws-sdk/client-rekognition": "^3.1155.0",
+    "@aws-sdk/client-sts": "^3.1155.0",
     "@simplewebauthn/browser": "^14.0.0",
     "@simplewebauthn/server": "^14.0.3",
     "@vladmandic/face-api": "^1.7.15",
+    "aws-amplify": "^6.22.2",
     "jose": "^6.2.12",
     "lucide-react": "^1.59.0",
     "mongoose": "^9.11.2",

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
 import { FaceCapture, type FaceCaptureResult, type LivenessChallenge } from "@/components/FaceCapture";
+import { AwsFaceScan, type AwsSession } from "@/components/AwsFaceScan";
 import { useToast } from "@/components/Toast";
 import { preloadFaceApi } from "@/lib/face.client";
 
@@ -30,6 +31,8 @@ type VoterProfile = {
   constituency?: string;
   ward?: string;
   hasFace: boolean;
+  /** Which engine enrolled the face: AWS Rekognition or our own. */
+  faceProvider?: "aws" | "local" | null;
   hasPasskey: boolean;
 };
 
@@ -135,6 +138,30 @@ export default function VoterLoginPage() {
       });
       if (!ok) return onAuthError(data.error ?? "Face verification failed.", data.hasVoted);
       onVerified(`Face matched (${data.confidence ?? 0}% confidence).`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Voters enrolled through AWS Rekognition are scanned and matched by AWS.
+  async function getAwsSession(): Promise<AwsSession> {
+    if (!voter) throw new Error("Enter your National ID first.");
+    const { ok, data } = await postJSON<AwsSession>("/api/face/aws-session", { purpose: "login", idNumber: voter.idNumber });
+    if (!ok) throw new Error(data.error ?? "Could not start the face scan.");
+    return data;
+  }
+
+  async function handleAwsFace(ticket: string) {
+    if (!voter) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { ok, data } = await postJSON<{ confidence?: number; hasVoted?: boolean }>("/api/auth/voter/face", {
+        idNumber: voter.idNumber,
+        awsTicket: ticket,
+      });
+      if (!ok) return onAuthError(data.error ?? "Face verification failed.", data.hasVoted);
+      onVerified(`Face matched (${data.confidence ?? 0}% similarity).`);
     } finally {
       setBusy(false);
     }
@@ -339,7 +366,11 @@ export default function VoterLoginPage() {
 
                 {method === "face" && (
                   <div className="space-y-3 animate-fade-up">
-                    <FaceCapture onCapture={handleFace} actionLabel="Verify Face" requireLiveness livenessChallenge={getLivenessChallenge} />
+                    {voter.faceProvider === "aws" ? (
+                      <AwsFaceScan startSession={getAwsSession} onComplete={handleAwsFace} actionLabel="Verify Face" />
+                    ) : (
+                      <FaceCapture onCapture={handleFace} actionLabel="Verify Face" requireLiveness livenessChallenge={getLivenessChallenge} />
+                    )}
                     {busy && (
                       <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">
                         <Loader2 className="size-4 animate-spin text-forest" /> Comparing with the voter register…
