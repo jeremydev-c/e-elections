@@ -112,7 +112,11 @@ export async function decodeImage(input: string | Uint8Array, maxSide = 960): Pr
  * Warps `img` with the affine map M (output -> source is computed by inverting it) into a
  * size x size crop. M maps source coordinates to crop coordinates: [a, b, tx, c, d, ty].
  */
-function warpAffine(img: RGBImage, M: number[], size: number): RGBImage {
+/**
+ * Bilinear warp of img through the 2x3 matrix M into a size x size (or [width, height])
+ * image. Outside the source is black, or the nearest edge pixel when clampEdges is set.
+ */
+function warpAffine(img: RGBImage, M: number[], size: number | [number, number], clampEdges = false): RGBImage {
   const [a, b, tx, c, d, ty] = M;
   const det = a * d - b * c;
   const ia = d / det;
@@ -120,11 +124,16 @@ function warpAffine(img: RGBImage, M: number[], size: number): RGBImage {
   const ic = -c / det;
   const id = a / det;
   const { data, width: W, height: H } = img;
-  const out = new Uint8Array(size * size * 3);
-  for (let v = 0; v < size; v++) {
-    for (let u = 0; u < size; u++) {
-      const x = ia * (u - tx) + ib * (v - ty);
-      const y = ic * (u - tx) + id * (v - ty);
+  const [ow, oh] = typeof size === "number" ? [size, size] : size;
+  const out = new Uint8Array(ow * oh * 3);
+  for (let v = 0; v < oh; v++) {
+    for (let u = 0; u < ow; u++) {
+      let x = ia * (u - tx) + ib * (v - ty);
+      let y = ic * (u - tx) + id * (v - ty);
+      if (clampEdges) {
+        x = Math.min(Math.max(x, 0), W - 1.001);
+        y = Math.min(Math.max(y, 0), H - 1.001);
+      }
       const x0 = Math.floor(x);
       const y0 = Math.floor(y);
       if (x0 < 0 || y0 < 0 || x0 + 1 >= W || y0 + 1 >= H) continue; // outside: black
@@ -132,13 +141,13 @@ function warpAffine(img: RGBImage, M: number[], size: number): RGBImage {
       const fy = y - y0;
       const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
       const i00 = (y0 * W + x0) * 3, i10 = i00 + 3, i01 = i00 + W * 3, i11 = i01 + 3;
-      const o = (v * size + u) * 3;
+      const o = (v * ow + u) * 3;
       out[o] = data[i00] * w00 + data[i10] * w10 + data[i01] * w01 + data[i11] * w11;
       out[o + 1] = data[i00 + 1] * w00 + data[i10 + 1] * w10 + data[i01 + 1] * w01 + data[i11 + 1] * w11;
       out[o + 2] = data[i00 + 2] * w00 + data[i10 + 2] * w10 + data[i01 + 2] * w01 + data[i11 + 2] * w11;
     }
   }
-  return { data: out, width: size, height: size };
+  return { data: out, width: ow, height: oh };
 }
 
 /** RGB HWC bytes -> float32 NCHW with (x - mean) / std. */
@@ -247,6 +256,17 @@ export function similarityTransform(src: Point[], dst: Point[]): number[] {
   const a = num1 / den;
   const b = num2 / den;
   return [a, -b, dx - a * sx + b * sy, b, a, dy - b * sx - a * sy];
+}
+
+/**
+ * A passport-style portrait: rotated so the eyes are level, scaled so the eyes sit 24%
+ * of the width apart and 47% down, which leaves the whole head and the top of the shoulders.
+ */
+export function portraitCrop(img: RGBImage, face: Face, width = 300, height = 375): RGBImage {
+  const half = 0.12 * width;
+  const eyeY = 0.47 * height;
+  const M = similarityTransform(face.kps.slice(0, 2), [[width / 2 - half, eyeY], [width / 2 + half, eyeY]]);
+  return warpAffine(img, M, [width, height], true);
 }
 
 /** The face warped onto the ArcFace template (112x112 RGB). */

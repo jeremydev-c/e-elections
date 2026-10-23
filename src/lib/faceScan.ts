@@ -6,6 +6,7 @@ import {
   embedAligned,
   landmarks106,
   liveScores,
+  portraitCrop,
   sharpness,
   yawOf,
   type Face,
@@ -27,7 +28,8 @@ import { LIVENESS_STEPS, type LivenessStep } from "@/lib/liveness";
  *      (measured from 106 landmarks, against this person's own open eyes).
  *   5. Passive anti-spoofing scores the frontal frames (photo / screen detection).
  *
- * The result is the voter's identity vector: the average of the frontal frames.
+ * The result is the voter's identity vector: the average of the frontal frames, and a
+ * passport-style photo from the most straight-on of them, eyes open.
  */
 
 export const FRONT_FRAMES = 3;
@@ -56,7 +58,35 @@ export const SCAN = {
   OTHER_FACE_SIZE: 0.35,
   /** Anti-spoof logit (real - spoof). Recorded on every scan; enforced only with FACE_ANTISPOOF=enforce. */
   LIVE_MIN: 0,
+  /**
+   * Registration photo (it is printed on the voter card): looking straight into the camera.
+   * Pitch is how far down the nose sits between the eye line and the mouth; on 400 LFW photos
+   * the median was 0.55, and it moves toward 0.4 when the head tips back and 0.7 when it drops.
+   */
+  PHOTO_MAX_YAW: 0.2,
+  PHOTO_PITCH: 0.55,
+  PHOTO_PITCH_TOL: 0.12,
+  /** Photo frame's eyes must be at least this open, relative to the widest-open frontal frame. */
+  PHOTO_EYES_OPEN: 0.8,
 } as const;
+
+/**
+ * Head pose from the 5 keypoints, measured in the frame of the eye line, so a head tilted
+ * sideways (roll) is not mistaken for one turned (yaw) or tipped (pitch).
+ */
+export function headPose(face: Face) {
+  const [le, re, nose, lm, rm] = face.kps;
+  const roll = Math.atan2(re[1] - le[1], re[0] - le[0]);
+  const along = (p: Point) => Math.cos(roll) * (p[0] - le[0]) + Math.sin(roll) * (p[1] - le[1]);
+  const down = (p: Point) => -Math.sin(roll) * (p[0] - le[0]) + Math.cos(roll) * (p[1] - le[1]);
+  const half = Math.max(1, along(re) / 2);
+  const mouth = (down(lm) + down(rm)) / 2;
+  return {
+    yaw: (along(nose) - half) / half,
+    pitch: mouth > 0 ? down(nose) / mouth : 0,
+    roll: (roll * 180) / Math.PI,
+  };
+}
 
 export type ScanRole = "FRONT" | LivenessStep;
 export type ScanFrame = { role: ScanRole; image: string };
@@ -99,13 +129,16 @@ export type ScanResult =
       /** Small JPEG of the first frontal frame (registration photo). */
       photo: string;
       /** Measurements, for the audit log and tuning. */
-      stats: { yaw: number[]; eyeRatio: number | null; liveScore: number; sameScanMin: number; ms: number };
+      stats: { yaw: number[]; eyeRatio: number | null; liveScore: number; sameScanMin: number; photo: { yaw: number; pitch: number }; ms: number };
     }
   | { ok: false; problem: ScanProblem; detail: string };
 
 type Analysed = { role: ScanRole; img: RGBImage; face: Face; aligned: RGBImage };
 
 const fail = (problem: ScanProblem, detail: string): ScanResult => ({ ok: false, problem, detail });
+
+/** Lower is straighter: turning and tipping both count, tipping a little more. */
+const straightness = (p: { yaw: number; pitch: number }) => Math.abs(p.yaw) + 1.5 * Math.abs(p.pitch - SCAN.PHOTO_PITCH);
 
 /** Eye opening from the 106 landmarks: lid gap divided by eye width, both eyes averaged. */
 function eyeOpening(pts: Point[]) {
@@ -155,7 +188,11 @@ async function locate(role: ScanRole, image: string): Promise<Analysed | ScanRes
  * Checks a whole scan against the liveness moves the server asked for.
  * `steps` comes from the redeemed challenge token, never from the client.
  */
-export async function analyseScan(frames: unknown, steps: LivenessStep[]): Promise<ScanResult> {
+export async function analyseScan(
+  frames: unknown,
+  steps: LivenessStep[],
+  { portrait = false }: { portrait?: boolean } = {}
+): Promise<ScanResult> {
   const started = performance.now();
   const roles: ScanRole[] = [...Array<ScanRole>(FRONT_FRAMES).fill("FRONT"), ...steps];
   if (
@@ -193,15 +230,15 @@ export async function analyseScan(frames: unknown, steps: LivenessStep[]): Promi
   // ...the moves really happened. In the raw camera image, a voter turning to THEIR left
   // moves the nose to the image right (yaw > 0)...
   const yaws = analysed.map((a) => yawOf(a.face));
+  const open = await Promise.all(fronts.map((f) => landmarks106(f.img, f.face).then(eyeOpening)));
   let eyeRatio: number | null = null;
   for (const m of moves) {
     const yaw = yawOf(m.face);
     if (m.role === "TURN_LEFT" && yaw < SCAN.TURN_YAW) return fail("MOVE_NOT_DONE", `TURN_LEFT: yaw ${yaw.toFixed(2)}`);
     if (m.role === "TURN_RIGHT" && yaw > -SCAN.TURN_YAW) return fail("MOVE_NOT_DONE", `TURN_RIGHT: yaw ${yaw.toFixed(2)}`);
     if (m.role === "BLINK") {
-      const open = await Promise.all(fronts.map((f) => landmarks106(f.img, f.face).then(eyeOpening)));
       const closed = eyeOpening(await landmarks106(m.img, m.face));
-      const baseline = open.sort((a, b) => a - b)[Math.floor(open.length / 2)];
+      const baseline = [...open].sort((a, b) => a - b)[Math.floor(open.length / 2)];
       eyeRatio = baseline > 0 ? closed / baseline : 1;
       if (eyeRatio > SCAN.BLINK_RATIO) return fail("MOVE_NOT_DONE", `BLINK: eyes at ${(eyeRatio * 100).toFixed(0)}% of open`);
     }
@@ -221,10 +258,20 @@ export async function analyseScan(frames: unknown, steps: LivenessStep[]): Promi
     return fail("SPOOF", `Anti-spoof score ${liveScore.toFixed(2)}`);
   }
 
-  const first = fronts[0].img;
-  const photo = await (await import("sharp")).default(Buffer.from(first.data), { raw: { width: first.width, height: first.height, channels: 3 } })
-    .resize({ width: 360, height: 360, fit: "inside" })
-    .jpeg({ quality: 80 })
+  // The photo: the most straight-on frontal frame with the eyes open, cropped like a passport photo.
+  const widest = Math.max(...open);
+  const best = fronts
+    .map((f, i) => ({ f, pose: headPose(f.face), eyes: widest > 0 ? open[i] / widest : 1 }))
+    .filter((c) => c.eyes >= SCAN.PHOTO_EYES_OPEN)
+    .sort((x, y) => straightness(x.pose) - straightness(y.pose))[0];
+  const tooTurned = Math.abs(best.pose.yaw) > SCAN.PHOTO_MAX_YAW;
+  const tooTipped = Math.abs(best.pose.pitch - SCAN.PHOTO_PITCH) > SCAN.PHOTO_PITCH_TOL;
+  if (portrait && (tooTurned || tooTipped)) {
+    return fail("NOT_FRONTAL", `PHOTO: yaw ${best.pose.yaw.toFixed(2)}, pitch ${best.pose.pitch.toFixed(2)}`);
+  }
+  const crop = portraitCrop(best.f.img, best.f.face);
+  const photo = await (await import("sharp")).default(Buffer.from(crop.data), { raw: { width: crop.width, height: crop.height, channels: 3 } })
+    .jpeg({ quality: 82 })
     .toBuffer();
 
   return {
@@ -237,6 +284,7 @@ export async function analyseScan(frames: unknown, steps: LivenessStep[]): Promi
       eyeRatio: eyeRatio === null ? null : Math.round(eyeRatio * 100) / 100,
       liveScore: Math.round(liveScore * 100) / 100,
       sameScanMin: Math.round(sameScanMin * 100) / 100,
+      photo: { yaw: Math.round(best.pose.yaw * 100) / 100, pitch: Math.round(best.pose.pitch * 100) / 100 },
       ms: Math.round(performance.now() - started),
     },
   };

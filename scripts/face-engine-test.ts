@@ -5,13 +5,14 @@
  *
  * Every way a scan must be refused is tried: wrong frames, no face, two people, too dark,
  * too far, someone swapped in mid-scan, moves not done. Then real matching: the same person
- * on a different photo is accepted, a different person is not.
+ * on a different photo is accepted, a different person is not. Last, the voter-card photo:
+ * the head-pose measure and the passport-style crop.
  */
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import { faceModelsInstalled } from "../src/lib/faceEngine";
-import { analyseScan, type ScanFrame, type ScanResult } from "../src/lib/faceScan";
+import { SCAN, analyseScan, headPose, type ScanFrame, type ScanResult } from "../src/lib/faceScan";
 import { FACE_MATCH_MIN, meanEmbedding, templateSimilarity } from "../src/lib/faceMath";
 import type { LivenessStep } from "../src/lib/liveness";
 
@@ -88,6 +89,32 @@ async function main() {
   const other = templateSimilarity(template, await vec(photo(B, 3)));
   check("Same person, different photo and day: accepted", sameNew >= FACE_MATCH_MIN, `similarity ${sameNew.toFixed(3)}`);
   check("Different person: refused", other < FACE_MATCH_MIN, `similarity ${other.toFixed(3)}`);
+
+  // Voter-card photo. Synthetic keypoints: eyes, nose tip, mouth corners of a straight face.
+  const { portraitCrop } = await import("../src/lib/faceEngine");
+  type Kps = [number, number][];
+  const straight: Kps = [[80, 100], [120, 100], [100, 122], [84, 140], [116, 140]];
+  const tipped: Kps = straight.map(([x, y], i) => [x, i === 2 ? 112 : y]);
+  const rot = (k: Kps, deg: number): Kps => {
+    const t = (deg * Math.PI) / 180;
+    return k.map(([x, y]) => [100 + (x - 100) * Math.cos(t) - (y - 120) * Math.sin(t), 120 + (x - 100) * Math.sin(t) + (y - 120) * Math.cos(t)]);
+  };
+  const face = (kps: Kps) => ({ box: [0, 0, 200, 200] as [number, number, number, number], score: 1, kps });
+  const ok = (k: Kps) => {
+    const p = headPose(face(k));
+    return Math.abs(p.yaw) <= SCAN.PHOTO_MAX_YAW && Math.abs(p.pitch - SCAN.PHOTO_PITCH) <= SCAN.PHOTO_PITCH_TOL;
+  };
+  check("Card photo: a straight face passes", ok(straight), `pitch ${headPose(face(straight)).pitch.toFixed(2)}`);
+  check("Card photo: head tipped back is refused", !ok(tipped), `pitch ${headPose(face(tipped)).pitch.toFixed(2)}`);
+  check("Card photo: a tilted head is not mistaken for tipped", ok(rot(straight, 18)), `pitch ${headPose(face(rot(straight, 18))).pitch.toFixed(2)}`);
+
+  const img = await decodeImage(await sharp(photo(A, 1)).resize(500, 500).jpeg().toBuffer());
+  const crop = portraitCrop(img, (await detectFaces(img))[0]);
+  const again = (await detectFaces(crop))[0];
+  const eyeTilt = again ? headPose(again).roll : 99;
+  const eyeY = again ? (again.kps[0][1] + again.kps[1][1]) / 2 / crop.height : 0;
+  check("Card photo: 300 x 375 crop, eyes level and 47% down", crop.width === 300 && crop.height === 375 && Math.abs(eyeTilt) < 3 && Math.abs(eyeY - 0.47) < 0.03,
+    `roll ${eyeTilt.toFixed(1)} deg, eyes at ${(eyeY * 100).toFixed(0)}%`);
 }
 
 main().then(() => {

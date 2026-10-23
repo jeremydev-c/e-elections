@@ -122,7 +122,8 @@ export async function POST(req: NextRequest) {
   // Bring the face index up to date (database round trips) while the frames are checked.
   const indexReady = faceIndex({ fresh: true });
   indexReady.catch(() => {});
-  const scan = await analyseScan(b.frames, steps);
+  // portrait: the registration photo is printed on the voter card, so it must look straight at the camera
+  const scan = await analyseScan(b.frames, steps, { portrait: true });
   if (!scan.ok) {
     await audit("LIVENESS_FAILED", { req, severity: "warning", actor: admin.username, idNumber, detail: `Registration scan: ${scan.detail}` });
     return NextResponse.json({ error: SCAN_MESSAGES[scan.problem], problem: scan.problem }, { status: 400 });
