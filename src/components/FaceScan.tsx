@@ -25,10 +25,17 @@ type Props = {
   getChallenge: () => Promise<Challenge>;
   onScan: (scan: FaceScanPayload) => Promise<void> | void;
   actionLabel: string;
+  /** Registration: the photo goes on the voter card, so wait for a truly straight-on face. */
+  portrait?: boolean;
 };
 
 // Same measure as the server (lib/faceEngine.ts yawOf), with a safety margin each way.
 const FRONT_YAW = 0.2; // server accepts up to 0.35
+// Registration (card photo): much straighter. The server takes up to 0.12 for the photo.
+const PORTRAIT_YAW = 0.08;
+// Head tipped up or down, in degrees, from MediaPipe's head-pose matrix (generous: the
+// server checks pitch exactly from its own landmarks).
+const PORTRAIT_PITCH_DEG = 14;
 const TURN_YAW = 0.55; // server needs 0.35
 const BLINK_SCORE = 0.6; // MediaPipe eyeBlink blendshape (0 open .. 1 shut)
 const MIN_FACE = 0.22; // face width as a share of the picture
@@ -66,6 +73,7 @@ function loadLandmarker() {
         runningMode: "VIDEO",
         numFaces: 2,
         outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: true,
       });
     return create("GPU").catch(() => create("CPU"));
   })().catch((err) => {
@@ -75,7 +83,7 @@ function loadLandmarker() {
   return landmarkerPromise;
 }
 
-type Reading = { yaw: number; blink: number; width: number; others: number; nose: [number, number] } | null;
+type Reading = { yaw: number; pitchDeg: number | null; blink: number; width: number; others: number; nose: [number, number] } | null;
 
 function read(res: FaceLandmarkerResult, vw: number, vh: number): Reading {
   const faces = res.faceLandmarks;
@@ -90,10 +98,16 @@ function read(res: FaceLandmarkerResult, vw: number, vh: number): Reading {
   const [le, re] = a[0] < b[0] ? [a, b] : [b, a];
   const nose: [number, number] = [lm[1].x * vw, lm[1].y * vh];
   const yaw = (nose[0] - (le[0] + re[0]) / 2) / Math.max(1, (re[0] - le[0]) / 2);
+  // Head pitch from the 4x4 pose matrix (column-major): rotation about the x axis. Folded
+  // into -90..90 so either axis convention reads "facing the camera" as about 0.
+  const m = res.facialTransformationMatrixes?.[main]?.data;
+  let pitchDeg = m && m.length >= 11 ? (Math.atan2(m[6], m[10]) * 180) / Math.PI : null;
+  if (pitchDeg !== null && Math.abs(pitchDeg) > 90) pitchDeg = Math.sign(pitchDeg) * (180 - Math.abs(pitchDeg));
   const cats = res.faceBlendshapes[main]?.categories ?? [];
   const score = (name: string) => cats.find((c) => c.categoryName === name)?.score ?? 0;
   return {
     yaw,
+    pitchDeg,
     blink: (score("eyeBlinkLeft") + score("eyeBlinkRight")) / 2,
     width: sizes[main],
     others: sizes.filter((s, i) => i !== main && s >= sizes[main] * 0.35).length,
@@ -108,7 +122,7 @@ type Phase =
   | { kind: "checking"; seconds: number }
   | { kind: "error"; msg: string };
 
-export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
+export function FaceScan({ getChallenge, onScan, actionLabel, portrait = false }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef(0);
@@ -230,7 +244,9 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
           // Frontal frames: face straight, held still for a moment.
           const still = lastNose ? Math.hypot(r.nose[0] - lastNose[0], r.nose[1] - lastNose[1]) < video.videoWidth * 0.012 : false;
           lastNose = r.nose;
-          const front = Math.abs(r.yaw) <= FRONT_YAW && r.blink < 0.4;
+          const front = portrait
+            ? Math.abs(r.yaw) <= PORTRAIT_YAW && r.blink < 0.3 && (r.pitchDeg === null || Math.abs(r.pitchDeg) <= PORTRAIT_PITCH_DEG)
+            : Math.abs(r.yaw) <= FRONT_YAW && r.blink < 0.4;
           setGood(front);
           if (!front) {
             stable = 0;

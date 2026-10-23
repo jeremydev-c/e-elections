@@ -63,7 +63,7 @@ export const SCAN = {
    * Pitch is how far down the nose sits between the eye line and the mouth; on 400 LFW photos
    * the median was 0.55, and it moves toward 0.4 when the head tips back and 0.7 when it drops.
    */
-  PHOTO_MAX_YAW: 0.2,
+  PHOTO_MAX_YAW: 0.12,
   PHOTO_PITCH: 0.55,
   PHOTO_PITCH_TOL: 0.12,
   /** Photo frame's eyes must be at least this open, relative to the widest-open frontal frame. */

@@ -560,7 +560,7 @@ function RegistrationWizard() {
                   actionLabel={t("register.capture")}
                 />
               ) : (
-                <FaceScan getChallenge={getChallenge} onScan={submitFace} actionLabel={t("register.capture")} />
+                <FaceScan getChallenge={getChallenge} onScan={submitFace} actionLabel={t("register.capture")} portrait />
               )}
               {busy && (
                 <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">
