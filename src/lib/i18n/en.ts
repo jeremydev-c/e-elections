@@ -201,6 +201,7 @@ export const en = {
     cameraBusy: "The camera is in use by another app. Close it and try again.",
     browserNoCamera: "This browser cannot use the camera.",
     startFailed: "Could not start the face scan.",
+    switchCamera: "Switch camera",
     photo: {
       intro: "First, the photo for the voter card. Look straight into the camera, like a passport photo. It is taken by itself when you hold still.",
       start: "Take card photo",
@@ -208,6 +209,8 @@ export const en = {
       review: "Is this a good card photo? Face straight on, eyes open, nothing covering the face.",
       use: "Use this photo",
       retake: "Retake",
+      onCard: "On the card",
+      checks: { alone: "Only one face", straight: "Looking straight", eyes: "Eyes open", still: "Holding still" },
     },
     prompts: {
       TURN_LEFT: "Turn your head to your left",

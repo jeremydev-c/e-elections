@@ -203,6 +203,7 @@ export const sw: Dict = {
     cameraBusy: "Kamera inatumiwa na programu nyingine. Ifunge kisha jaribu tena.",
     browserNoCamera: "Kivinjari hiki hakiwezi kutumia kamera.",
     startFailed: "Haikuweza kuanza uchunguzi wa uso.",
+    switchCamera: "Badilisha kamera",
     photo: {
       intro: "Kwanza, picha ya kadi ya mpiga kura. Tazama kamera moja kwa moja, kama picha ya pasipoti. Itapigwa yenyewe ukitulia.",
       start: "Piga picha ya kadi",
@@ -210,6 +211,8 @@ export const sw: Dict = {
       review: "Je, hii ni picha nzuri ya kadi? Uso umenyooka, macho wazi, hakuna kinachofunika uso.",
       use: "Tumia picha hii",
       retake: "Piga tena",
+      onCard: "Kwenye kadi",
+      checks: { alone: "Uso mmoja tu", straight: "Umetazama moja kwa moja", eyes: "Macho wazi", still: "Umetulia" },
     },
     prompts: {
       TURN_LEFT: "Geuza kichwa chako kushoto",

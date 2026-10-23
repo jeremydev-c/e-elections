@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, Check, CheckCircle2, Loader2, RotateCcw } from "lucide-react";
+import { Camera, Check, CheckCircle2, Loader2, RotateCcw, SwitchCamera } from "lucide-react";
 import type { FaceLandmarker, FaceLandmarkerResult } from "@mediapipe/tasks-vision";
 import type { LivenessStep } from "@/lib/liveness";
 import { useI18n } from "@/lib/i18n/I18n";
@@ -81,7 +81,77 @@ function loadLandmarker() {
   return landmarkerPromise;
 }
 
-type Reading = { yaw: number; pitchDeg: number | null; blink: number; width: number; others: number; nose: [number, number] } | null;
+/* ------------------------------------------------------------------ cameras */
+
+const CAMERA_KEY = "ee_camera";
+const CAMERA_SIZE = { width: { ideal: 1280 }, height: { ideal: 720 } };
+
+function savedCamera(): string | undefined {
+  try {
+    return localStorage.getItem(CAMERA_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Opens the camera last chosen on this device (an official may have switched to the back
+ * camera to photograph the voter), else the front camera.
+ */
+async function openCamera(): Promise<MediaStream> {
+  const id = savedCamera();
+  if (id) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: id }, ...CAMERA_SIZE }, audio: false });
+    } catch {
+      // That camera is unplugged or blocked: fall back to the front camera.
+    }
+  }
+  return navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", ...CAMERA_SIZE }, audio: false });
+}
+
+const videoInputs = async () => (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+
+/** Remembers the camera after the one in use, so the next openCamera() uses it. */
+async function chooseNextCamera(current: MediaStream | null) {
+  const cams = await videoInputs();
+  if (cams.length < 2) return;
+  const now = current?.getVideoTracks()[0]?.getSettings().deviceId;
+  const next = cams[(cams.findIndex((c) => c.deviceId === now) + 1) % cams.length];
+  try {
+    localStorage.setItem(CAMERA_KEY, next.deviceId);
+  } catch {
+    // Private browsing: the switch still works for this scan.
+  }
+}
+
+/** A selfie camera is shown mirrored, like a mirror; a back camera pointed at the voter is not. */
+const isMirrored = (stream: MediaStream) => stream.getVideoTracks()[0]?.getSettings().facingMode !== "environment";
+
+function SwitchCameraButton({ onClick }: { onClick: () => void }) {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-ink/70 px-3 py-1.5 text-xs font-semibold text-paper backdrop-blur hover:bg-ink/90"
+    >
+      <SwitchCamera className="size-4" aria-hidden /> {t("faceScan.switchCamera")}
+    </button>
+  );
+}
+
+type Point2 = [number, number];
+type Reading = {
+  yaw: number;
+  pitchDeg: number | null;
+  blink: number;
+  width: number;
+  others: number;
+  nose: Point2;
+  /** Iris centres, image-left first, in raw camera pixels. */
+  eyes: [Point2, Point2];
+} | null;
 
 function read(res: FaceLandmarkerResult, vw: number, vh: number): Reading {
   const faces = res.faceLandmarks;
@@ -110,6 +180,7 @@ function read(res: FaceLandmarkerResult, vw: number, vh: number): Reading {
     width: sizes[main],
     others: sizes.filter((s, i) => i !== main && s >= sizes[main] * 0.35).length,
     nose,
+    eyes: [le as Point2, re as Point2],
   };
 }
 
@@ -132,6 +203,8 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
   const [stepIndex, setStepIndex] = useState(-1);
   const [steps, setSteps] = useState<LivenessStep[]>([]);
   const [good, setGood] = useState(false);
+  const [mirrored, setMirrored] = useState(true);
+  const [cameras, setCameras] = useState(0);
 
   // Start downloading MediaPipe as soon as the scanner is on screen.
   useEffect(() => {
@@ -162,12 +235,10 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
     try {
       setPhase({ kind: "starting", msg: t("faceScan.opening") });
       if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error(t("faceScan.browserNoCamera")), { name: "NoCamera" });
-      const [stream, landmarker, challenge] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }),
-        loadLandmarker(),
-        getChallenge(),
-      ]);
+      const [stream, landmarker, challenge] = await Promise.all([openCamera(), loadLandmarker(), getChallenge()]);
       streamRef.current = stream;
+      setMirrored(isMirrored(stream));
+      videoInputs().then((c) => setCameras(c.length), () => {});
       const video = videoRef.current!;
       video.srcObject = stream;
       await video.play().catch(() => {});
@@ -295,7 +366,10 @@ export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
   return (
     <div className="space-y-3">
       <div className="relative mx-auto aspect-[4/3] w-full max-w-md overflow-hidden rounded-2xl border border-line bg-ink">
-        <video ref={videoRef} playsInline muted className="h-full w-full -scale-x-100 object-cover" />
+        <video ref={videoRef} playsInline muted className={`h-full w-full object-cover ${mirrored ? "-scale-x-100" : ""}`} />
+        {cameras > 1 && phase.kind !== "checking" && phase.kind !== "starting" && (
+          <SwitchCameraButton onClick={() => chooseNextCamera(streamRef.current).then(start)} />
+        )}
         {scanning && (
           <>
             {/* The whole picture is the target: corner brackets at its edges. */}
@@ -380,6 +454,11 @@ export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => 
   const [hint, setHint] = useState("faceScan.lookAtCamera");
   const [count, setCount] = useState<number | null>(null);
   const [shot, setShot] = useState("");
+  // The photo cropped the way the card will print it (same framing as the server's crop).
+  const [onCard, setOnCard] = useState("");
+  const [checks, setChecks] = useState({ alone: false, straight: false, eyes: false, still: false });
+  const [mirrored, setMirrored] = useState(true);
+  const [cameras, setCameras] = useState(0);
 
   useEffect(() => {
     loadLandmarker().catch(() => {});
@@ -399,11 +478,10 @@ export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => 
     setPhase("starting");
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error(t("faceScan.browserNoCamera")), { name: "NoCamera" });
-      const [stream, landmarker] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }),
-        loadLandmarker(),
-      ]);
+      const [stream, landmarker] = await Promise.all([openCamera(), loadLandmarker()]);
       streamRef.current = stream;
+      setMirrored(isMirrored(stream));
+      videoInputs().then((c) => setCameras(c.length), () => {});
       const video = videoRef.current!;
       video.srcObject = stream;
       await video.play().catch(() => {});
@@ -437,12 +515,18 @@ export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => 
         const r = read(landmarker.detectForVideo(video, now), video.videoWidth, video.videoHeight);
         const still = !!r && !!lastNose && Math.hypot(r.nose[0] - lastNose[0], r.nose[1] - lastNose[1]) < video.videoWidth * 0.01;
         lastNose = r ? r.nose : null;
+        const ok = {
+          alone: !!r && !r.others,
+          straight: !!r && Math.abs(r.yaw) <= PORTRAIT_YAW && (r.pitchDeg === null || Math.abs(r.pitchDeg) <= PORTRAIT_PITCH_DEG),
+          eyes: !!r && r.blink <= 0.3,
+          still,
+        };
+        setChecks(ok);
         let why = "";
         if (!r) why = "faceScan.lookAtCamera";
-        else if (r.others) why = "faceScan.onlyYou";
+        else if (!ok.alone) why = "faceScan.onlyYou";
         else if (r.width < MIN_FACE) why = "faceScan.closer";
-        else if (Math.abs(r.yaw) > PORTRAIT_YAW || r.blink > 0.3 || (r.pitchDeg !== null && Math.abs(r.pitchDeg) > PORTRAIT_PITCH_DEG))
-          why = "faceScan.lookStraight";
+        else if (!ok.straight || !ok.eyes) why = "faceScan.lookStraight";
         else if (!still) why = "faceScan.holdStill";
         if (why) {
           since = 0;
@@ -459,6 +543,7 @@ export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => 
             c.height = Math.round(video.videoHeight * scale);
             c.getContext("2d")!.drawImage(video, 0, 0, c.width, c.height);
             setShot(c.toDataURL("image/jpeg", 0.9));
+            setOnCard(cardCrop(video, r!.eyes));
             stop();
             setPhase("review");
             return;
@@ -473,10 +558,18 @@ export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => 
   return (
     <div className="space-y-3">
       <div className="relative mx-auto aspect-[4/3] w-full max-w-md overflow-hidden rounded-2xl border border-line bg-ink">
-        <video ref={videoRef} playsInline muted className={`h-full w-full -scale-x-100 object-cover ${phase === "review" ? "hidden" : ""}`} />
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          className={`h-full w-full object-cover ${mirrored ? "-scale-x-100" : ""} ${phase === "review" ? "hidden" : ""}`}
+        />
         {phase === "review" && shot && (
           /* eslint-disable-next-line @next/next/no-img-element */
-          <img src={shot} alt="" className="h-full w-full -scale-x-100 object-cover" />
+          <img src={shot} alt="" className={`h-full w-full object-cover ${mirrored ? "-scale-x-100" : ""}`} />
+        )}
+        {cameras > 1 && (phase === "live" || phase === "idle" || phase === "error") && (
+          <SwitchCameraButton onClick={() => chooseNextCamera(streamRef.current).then(start)} />
         )}
         {phase === "live" && (
           <>
@@ -490,6 +583,18 @@ export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => 
             {count !== null && count > 0 && (
               <span className="absolute inset-0 grid place-items-center font-display text-7xl text-white drop-shadow-lg">{count}</span>
             )}
+            {/* What the photo still needs, ticked off live */}
+            <ul className="absolute left-3 top-3 space-y-1">
+              {(["alone", "straight", "eyes", "still"] as const).map((k) => (
+                <li
+                  key={k}
+                  className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${checks[k] ? "bg-[#8fd19e] text-ink" : "bg-ink/60 text-paper/80"}`}
+                >
+                  {checks[k] ? <Check className="size-3" aria-hidden /> : <span className="size-3 rounded-full border border-paper/60" aria-hidden />}
+                  {t(`faceScan.photo.checks.${k}`)}
+                </li>
+              ))}
+            </ul>
             <div className="absolute inset-x-4 bottom-4 text-center">
               <span className="inline-block rounded-full bg-ink/75 px-4 py-2 text-base font-semibold text-paper shadow-lg">
                 {count !== null ? t("faceScan.photo.countdown", { n: Math.max(count, 1) }) : t(hint)}
@@ -523,6 +628,13 @@ export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => 
       </div>
       {phase === "review" && (
         <div className="space-y-3 text-center">
+          {onCard && (
+            <figure className="mx-auto w-fit">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={onCard} alt="" className="h-[150px] w-[120px] rounded-lg border border-line-strong object-cover shadow-sm" />
+              <figcaption className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">{t("faceScan.photo.onCard")}</figcaption>
+            </figure>
+          )}
           <p className="text-sm text-ink-soft">{t("faceScan.photo.review")}</p>
           <div className="flex justify-center gap-3">
             <button type="button" id="reg-photo-retake" className="btn-ghost" onClick={start}>
@@ -536,4 +648,26 @@ export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => 
       )}
     </div>
   );
+}
+
+/**
+ * The card photo the way it will print: eyes level, 24% of the width apart and 47% down, in a
+ * 300 x 375 frame, the same framing as the server's portraitCrop (lib/faceEngine.ts).
+ */
+function cardCrop(video: HTMLVideoElement, [le, re]: [Point2, Point2]): string {
+  const W = 300;
+  const H = 375;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#e4e0d4";
+  g.fillRect(0, 0, W, H);
+  const dist = Math.hypot(re[0] - le[0], re[1] - le[1]) || 1;
+  g.translate(W / 2, 0.47 * H);
+  g.rotate(-Math.atan2(re[1] - le[1], re[0] - le[0]));
+  g.scale((0.24 * W) / dist, (0.24 * W) / dist);
+  g.translate(-(le[0] + re[0]) / 2, -(le[1] + re[1]) / 2);
+  g.drawImage(video, 0, 0);
+  return c.toDataURL("image/jpeg", 0.85);
 }
