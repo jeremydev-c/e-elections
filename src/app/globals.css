@@ -186,7 +186,13 @@ p {
 }
 
 @media print {
+  @page { size: A4; margin: 14mm; }
   body { background: #fff; color: #000; }
+  /* Voter card sheet: exact ID-card size (85.6 x 54 mm), colours kept, dashed cut lines. */
+  body:has(> .voter-card-print) > :not(.voter-card-print) { display: none !important; }
+  .voter-card-print { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .voter-card-print .card-face { display: block; width: 85.6mm; height: 54mm; }
+  .voter-card-print .crop-marks { padding: 2mm; border: 0.2mm dashed #9a9a9a; }
 }
 
 @media (prefers-reduced-motion: reduce) {

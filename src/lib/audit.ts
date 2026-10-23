@@ -17,7 +17,9 @@ export type AuditEvent =
   | "INVALID_BALLOT_REJECTED"
   | "LEDGER_TAMPER_DETECTED"
   | "DATABASE_SEEDED"
-  | "ELECTION_RESET";
+  | "ELECTION_RESET"
+  | "VOTER_CARD_PRINTED"
+  | "FORGED_CARD_SCANNED";
 
 type Severity = "info" | "warning" | "critical";
 

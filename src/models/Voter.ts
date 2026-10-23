@@ -44,6 +44,11 @@ const voterSchema = new Schema(
     // scrypt hash of the 4-digit PIN used for *2027# USSD voting.
     ussdPinHash: { type: String, select: false, default: undefined },
 
+    // Printed voter card: the serial goes up each time a card is reissued, so a
+    // lost or stolen older card stops verifying (see lib/voterCard.ts).
+    cardSerial: { type: Number, default: 1 },
+    cardIssuedAt: { type: Date, default: undefined },
+
     hasVoted: { type: Boolean, default: false, index: true },
     // SECRET BALLOT: rounded DOWN to the hour (see lib/castVote.ts), so it
     // can never be matched against an exact vote_ledger timestamp to

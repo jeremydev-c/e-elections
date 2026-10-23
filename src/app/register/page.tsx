@@ -14,7 +14,6 @@ import {
   LogOut,
   MapPin,
   Printer,
-  QrCode,
   ScanFace,
   ShieldCheck,
   Smartphone,
@@ -25,6 +24,7 @@ import { PageTitle } from "@/components/Brand";
 import { FaceScan, preloadFaceScan, type Challenge, type FaceScanPayload } from "@/components/FaceScan";
 import { AwsFaceScan, type AwsSession } from "@/components/AwsFaceScan";
 import { useToast } from "@/components/Toast";
+import { VoterCardBack, VoterCardFront, VoterCardPrintSheet, type VoterCardData } from "@/components/VoterCard";
 import { useI18n } from "@/lib/i18n/I18n";
 import { COUNTIES, getCounty, getWard } from "@/lib/regions";
 
@@ -196,13 +196,26 @@ function RegistrationWizard() {
   const [step, setStep] = useState<Step>(1);
   const [form, setForm] = useState(emptyForm);
   const [registered, setRegistered] = useState<Registered | null>(null);
-  const [passkeyAdded, setPasskeyAdded] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [idCheck, setIdCheck] = useState<IdCheckState>({ status: "idle" });
   const [checkingId, setCheckingId] = useState(false);
   const [platformSensor, setPlatformSensor] = useState<boolean | null>(null);
+  const [card, setCard] = useState<VoterCardData | null>(null);
+  const [cardError, setCardError] = useState("");
   const toast = useToast();
+
+  // The printable card: card number and signed QR code come from the server.
+  useEffect(() => {
+    if (step !== 4 || !registered) return;
+    let alive = true;
+    api<Omit<VoterCardData, "photoDataUrl">>(`/api/voters/${registered.voterId}/card`)
+      .then((d) => alive && setCard({ ...d, photoDataUrl: registered.photoDataUrl }))
+      .catch((e) => alive && setCardError(serverText((e as Error).message) || t("card.failed")));
+    return () => {
+      alive = false;
+    };
+  }, [step, registered, serverText, t]);
 
   useEffect(() => {
     if (step !== 3) return;
@@ -344,7 +357,6 @@ function RegistrationWizard() {
         method: "POST",
         body: JSON.stringify({ voterId: registered.voterId, response }),
       });
-      setPasskeyAdded(true);
       toast.success(t("register.toastFingerTitle"), t("register.toastFingerBody"));
       setStep(4);
     } catch (err) {
@@ -364,7 +376,8 @@ function RegistrationWizard() {
   function reset() {
     setForm(emptyForm);
     setRegistered(null);
-    setPasskeyAdded(false);
+    setCard(null);
+    setCardError("");
     setError("");
     setIdCheck({ status: "idle" });
     setStep(1);
@@ -624,63 +637,30 @@ function RegistrationWizard() {
 
           {step === 4 && registered && (
             <div className="space-y-6">
-              {/* Voter card */}
-              <div className="overflow-hidden rounded-2xl border border-line bg-surface">
-                <div className="flag-bar h-1.5" aria-hidden />
-                <div className="flex flex-col gap-6 p-6 sm:flex-row sm:items-start">
-                  <div className="flex flex-col items-center sm:items-start">
-                    <div className="relative size-36 overflow-hidden rounded-xl border border-line-strong bg-paper-2">
-                      {registered.photoDataUrl ? (
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        <img src={registered.photoDataUrl} alt={t("register.photoAlt")} className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="grid h-full w-full place-items-center">
-                          <IdCard className="size-14 text-ink-faint" />
-                        </div>
-                      )}
-                      <span className="absolute bottom-1.5 right-1.5 rounded bg-forest px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-white">
-                        {t("register.verified")}
-                      </span>
-                    </div>
-                    <span className="mt-2 font-mono text-[11px] tracking-widest text-ink-soft">ID {registered.idNumber}</span>
-                  </div>
-
-                  <div className="flex-1 space-y-4">
-                    <div className="border-b border-line pb-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="eyebrow text-forest">{t("register.cardRepublic")}</span>
-                        <span className="inline-flex items-center gap-1 rounded-full bg-forest-soft px-2 py-0.5 text-[10px] font-semibold text-forest">
-                          <CheckCircle2 className="size-3" /> {t("register.activeVoter")}
-                        </span>
-                      </div>
-                      <h3 className="mt-2 font-display text-3xl leading-tight text-ink">{registered.fullName}</h3>
-                    </div>
-
-                    <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-                      <Field label={t("common.county")} value={county?.name ?? form.countyCode} />
-                      <Field label={t("common.constituency")} value={constituency?.name ?? form.constituencyCode} />
-                      <Field label={t("common.ward")} value={ward?.name ?? form.wardCode} />
-                      <Field label={t("common.phone")} value={registered.phone ?? form.phone} mono />
-                    </dl>
-
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-forest-soft px-3.5 py-2.5 text-xs">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-forest">
-                        <ShieldCheck className="size-4" /> {t("register.faceStatus")}
-                      </span>
-                      <span className="text-ink-soft">{t("register.fingerStatus", { state: passkeyAdded ? t("register.linked") : t("register.none") })}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-6 py-3 font-mono text-[11px] text-ink-soft">
-                  <span className="inline-flex items-center gap-1.5">
-                    <QrCode className="size-3.5" /> {t("register.regRef", { id: registered.idNumber })}
-                  </span>
-                  <span>{t("register.anywhere")}</span>
-                </div>
+              <div className="text-center">
+                <h2 className="font-display text-3xl text-ink">{t("card.title")}</h2>
+                <p className="mx-auto mt-2 max-w-lg text-sm text-ink-soft">{t("card.lead")}</p>
               </div>
 
+              {card ? (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <VoterCardFront data={card} className="h-auto w-full drop-shadow-md" />
+                    <VoterCardBack data={card} className="h-auto w-full drop-shadow-md" />
+                  </div>
+                  <p className="mx-auto max-w-lg text-center text-xs leading-relaxed text-ink-soft">{t("card.unique")}</p>
+                  <VoterCardPrintSheet data={card} />
+                </>
+              ) : cardError ? (
+                <ErrorBox msg={cardError} />
+              ) : (
+                <p className="flex items-center justify-center gap-2 py-10 text-sm text-ink-soft">
+                  <Loader2 className="size-4 animate-spin" /> {t("card.loading")}
+                </p>
+              )}
+
               <div className="flex flex-col justify-center gap-3 sm:flex-row">
-                <button type="button" id="reg-print-card" onClick={() => window.print()} className="btn-ghost">
+                <button type="button" id="reg-print-card" onClick={() => window.print()} className="btn-ghost" disabled={!card}>
                   <Printer className="size-4" aria-hidden /> {t("register.printCard")}
                 </button>
                 <button type="button" id="reg-another" className="btn-primary" onClick={reset}>
@@ -695,14 +675,6 @@ function RegistrationWizard() {
   );
 }
 
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div>
-      <dt className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">{label}</dt>
-      <dd className={`mt-0.5 font-semibold text-ink ${mono ? "font-mono" : ""}`}>{value}</dd>
-    </div>
-  );
-}
 
 function ErrorBox({ msg }: { msg: string }) {
   return (

@@ -23,6 +23,8 @@ function key(envName: string, label: string): Buffer {
 
 let ledger: Buffer | undefined;
 let biometric: Buffer | undefined;
+let card: Buffer | undefined;
 
 export const ledgerKey = () => (ledger ??= key("LEDGER_SECRET", "ledger-seal-v1"));
 export const biometricKey = () => (biometric ??= key("BIOMETRIC_KEY", "biometric-aes-256-gcm-v1"));
+export const cardKey = () => (card ??= key("CARD_SECRET", "voter-card-v1"));
