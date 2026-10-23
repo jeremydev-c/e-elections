@@ -9,7 +9,7 @@ import { FACE_MATCH_MIN, templateSimilarity } from "@/lib/faceMath";
 import { encryptFaceTemplate, encryptPhoto } from "@/lib/biometricVault";
 import { faceModelsInstalled } from "@/lib/faceEngine";
 import { closestTemplates, faceIndex, indexVoter, isCurrentTemplate } from "@/lib/faceIndex";
-import { SCAN_MESSAGES, analyseScan } from "@/lib/faceScan";
+import { SCAN_MESSAGES, analyseCardPhoto, analyseScan } from "@/lib/faceScan";
 import { redeemChallenge } from "@/lib/livenessChallenge";
 import { enrollFace, redeemLiveFace, removeFace, searchFace } from "@/lib/awsFace";
 import { Types } from "mongoose";
@@ -122,11 +122,21 @@ export async function POST(req: NextRequest) {
   // Bring the face index up to date (database round trips) while the frames are checked.
   const indexReady = faceIndex({ fresh: true });
   indexReady.catch(() => {});
-  // portrait: the registration photo is printed on the voter card, so it must look straight at the camera
-  const scan = await analyseScan(b.frames, steps, { portrait: true });
+  // The card photo is taken on its own, looking straight into the camera. Without one (older
+  // clients), the straightest frame of the scan is used, held to the same straight-on limits.
+  const scan = await analyseScan(b.frames, steps, { portrait: !b.cardPhoto });
   if (!scan.ok) {
     await audit("LIVENESS_FAILED", { req, severity: "warning", actor: admin.username, idNumber, detail: `Registration scan: ${scan.detail}` });
     return NextResponse.json({ error: SCAN_MESSAGES[scan.problem], problem: scan.problem }, { status: 400 });
+  }
+  let cardPhoto = scan.photo;
+  if (b.cardPhoto) {
+    const card = await analyseCardPhoto(b.cardPhoto, scan.embedding);
+    if (!card.ok) {
+      await audit("LIVENESS_FAILED", { req, severity: "warning", actor: admin.username, idNumber, detail: card.detail });
+      return NextResponse.json({ error: SCAN_MESSAGES[card.problem], problem: card.problem, retakePhoto: true }, { status: 400 });
+    }
+    cardPhoto = card.photo;
   }
 
   // One person, one registration: reject a face that is already enrolled
@@ -143,7 +153,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const photoDataUrl = scan.photo;
+    const photoDataUrl = cardPhoto;
     const photoOk = photoDataUrl.length < 300_000;
     const voter = await Voter.create({
       idNumber,

@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import { faceModelsInstalled } from "../src/lib/faceEngine";
-import { SCAN, analyseScan, headPose, type ScanFrame, type ScanResult } from "../src/lib/faceScan";
+import { SCAN, analyseCardPhoto, analyseScan, headPose, type ScanFrame, type ScanResult } from "../src/lib/faceScan";
 import { FACE_MATCH_MIN, meanEmbedding, templateSimilarity } from "../src/lib/faceMath";
 import type { LivenessStep } from "../src/lib/liveness";
 
@@ -115,6 +115,15 @@ async function main() {
   const eyeY = again ? (again.kps[0][1] + again.kps[1][1]) / 2 / crop.height : 0;
   check("Card photo: 300 x 375 crop, eyes level and 47% down", crop.width === 300 && crop.height === 375 && Math.abs(eyeTilt) < 3 && Math.abs(eyeY - 0.47) < 0.03,
     `roll ${eyeTilt.toFixed(1)} deg, eyes at ${(eyeY * 100).toFixed(0)}%`);
+
+  // The card photo taken on its own: straight on, and the same person as the scan.
+  const cardOf = (buf: Buffer) => frame(buf).then((img) => analyseCardPhoto(img, template.mean));
+  const good = await cardOf(photo(A, 1));
+  check("Card photo: straight photo of the voter accepted", good.ok, good.ok ? `yaw ${good.pose.yaw}, pitch ${good.pose.pitch}` : `${good.problem}: ${good.detail}`);
+  const turned = await cardOf(photo(A, 14)); // a slight turn (yaw about 0.24), alone in the picture
+  check("Card photo: turned photo refused", !turned.ok && turned.problem === "PHOTO_NOT_STRAIGHT", turned.ok ? "accepted" : turned.detail);
+  const stranger = await cardOf(photo(B, 1));
+  check("Card photo: someone else refused", !stranger.ok && ["PHOTO_NOT_SAME", "PHOTO_NOT_STRAIGHT"].includes(stranger.problem), stranger.ok ? "accepted" : stranger.detail);
 }
 
 main().then(() => {

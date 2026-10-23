@@ -21,7 +21,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { PageTitle } from "@/components/Brand";
-import { FaceScan, preloadFaceScan, type Challenge, type FaceScanPayload } from "@/components/FaceScan";
+import { CardPhotoCapture, FaceScan, preloadFaceScan, type Challenge, type FaceScanPayload } from "@/components/FaceScan";
 import { AwsFaceScan, type AwsSession } from "@/components/AwsFaceScan";
 import { useToast } from "@/components/Toast";
 import { VoterCardBack, VoterCardFront, VoterCardPrintSheet, type VoterCardData } from "@/components/VoterCard";
@@ -52,7 +52,8 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
+  // retakePhoto: the server refused the card photo, so the desk should take it again.
+  if (!res.ok) throw Object.assign(new Error(data.error ?? `Request failed (${res.status})`), { retakePhoto: !!data.retakePhoto });
   return data as T;
 }
 
@@ -202,6 +203,8 @@ function RegistrationWizard() {
   const [checkingId, setCheckingId] = useState(false);
   const [platformSensor, setPlatformSensor] = useState<boolean | null>(null);
   const [card, setCard] = useState<VoterCardData | null>(null);
+  // The voter-card photo, taken looking straight into the camera before the face scan.
+  const [cardPhoto, setCardPhoto] = useState<string | null>(null);
   const [cardError, setCardError] = useState("");
   const toast = useToast();
 
@@ -311,7 +314,7 @@ function RegistrationWizard() {
     try {
       const r = await api<Registered>("/api/voters", {
         method: "POST",
-        body: JSON.stringify({ ...form, liveness, frames }),
+        body: JSON.stringify({ ...form, liveness, frames, cardPhoto }),
       });
       setRegistered(r);
       toast.success(t("register.toastRegTitle"), t("register.toastRegBody", { name: r.fullName }));
@@ -319,6 +322,7 @@ function RegistrationWizard() {
     } catch (err) {
       const msg = serverText((err as Error).message);
       setError(msg);
+      if ((err as { retakePhoto?: boolean }).retakePhoto) setCardPhoto(null);
       throw new Error(msg);
     } finally {
       setBusy(false);
@@ -378,6 +382,7 @@ function RegistrationWizard() {
     setRegistered(null);
     setCard(null);
     setCardError("");
+    setCardPhoto(null);
     setError("");
     setIdCheck({ status: "idle" });
     setStep(1);
@@ -559,8 +564,29 @@ function RegistrationWizard() {
                   onComplete={submitAwsFace}
                   actionLabel={t("register.capture")}
                 />
+              ) : !cardPhoto ? (
+                <div className="space-y-3">
+                  <p className="text-center font-mono text-[11px] uppercase tracking-[0.14em] text-forest">{t("register.photoStep")}</p>
+                  <CardPhotoCapture
+                    onCapture={(image) => {
+                      setError("");
+                      setCardPhoto(image);
+                    }}
+                  />
+                </div>
               ) : (
-                <FaceScan getChallenge={getChallenge} onScan={submitFace} actionLabel={t("register.capture")} portrait />
+                <div className="space-y-3">
+                  <div className="mx-auto flex w-fit items-center gap-3 rounded-full border border-line bg-paper py-1.5 pl-1.5 pr-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={cardPhoto} alt={t("register.photoAlt")} className="size-10 rounded-full object-cover -scale-x-100" />
+                    <span className="text-sm font-medium text-ink">{t("register.photoReady")}</span>
+                    <button type="button" id="reg-retake-photo" className="rounded-full px-3 py-1 text-xs font-semibold text-forest hover:bg-forest-soft" onClick={() => setCardPhoto(null)} disabled={busy}>
+                      {t("register.retakePhoto")}
+                    </button>
+                  </div>
+                  <p className="text-center font-mono text-[11px] uppercase tracking-[0.14em] text-forest">{t("register.scanStep")}</p>
+                  <FaceScan getChallenge={getChallenge} onScan={submitFace} actionLabel={t("register.capture")} />
+                </div>
               )}
               {busy && (
                 <p className="flex items-center justify-center gap-2 text-sm text-ink-soft">

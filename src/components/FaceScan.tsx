@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, CheckCircle2, Loader2, RotateCcw } from "lucide-react";
+import { Camera, Check, CheckCircle2, Loader2, RotateCcw } from "lucide-react";
 import type { FaceLandmarker, FaceLandmarkerResult } from "@mediapipe/tasks-vision";
 import type { LivenessStep } from "@/lib/liveness";
 import { useI18n } from "@/lib/i18n/I18n";
@@ -25,13 +25,11 @@ type Props = {
   getChallenge: () => Promise<Challenge>;
   onScan: (scan: FaceScanPayload) => Promise<void> | void;
   actionLabel: string;
-  /** Registration: the photo goes on the voter card, so wait for a truly straight-on face. */
-  portrait?: boolean;
 };
 
 // Same measure as the server (lib/faceEngine.ts yawOf), with a safety margin each way.
 const FRONT_YAW = 0.2; // server accepts up to 0.35
-// Registration (card photo): much straighter. The server takes up to 0.12 for the photo.
+// The card photo (CardPhotoCapture) must be much straighter: the server takes up to 0.12.
 const PORTRAIT_YAW = 0.08;
 // Head tipped up or down, in degrees, from MediaPipe's head-pose matrix (generous: the
 // server checks pitch exactly from its own landmarks).
@@ -122,7 +120,7 @@ type Phase =
   | { kind: "checking"; seconds: number }
   | { kind: "error"; msg: string };
 
-export function FaceScan({ getChallenge, onScan, actionLabel, portrait = false }: Props) {
+export function FaceScan({ getChallenge, onScan, actionLabel }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef(0);
@@ -244,9 +242,7 @@ export function FaceScan({ getChallenge, onScan, actionLabel, portrait = false }
           // Frontal frames: face straight, held still for a moment.
           const still = lastNose ? Math.hypot(r.nose[0] - lastNose[0], r.nose[1] - lastNose[1]) < video.videoWidth * 0.012 : false;
           lastNose = r.nose;
-          const front = portrait
-            ? Math.abs(r.yaw) <= PORTRAIT_YAW && r.blink < 0.3 && (r.pitchDeg === null || Math.abs(r.pitchDeg) <= PORTRAIT_PITCH_DEG)
-            : Math.abs(r.yaw) <= FRONT_YAW && r.blink < 0.4;
+          const front = Math.abs(r.yaw) <= FRONT_YAW && r.blink < 0.4;
           setGood(front);
           if (!front) {
             stable = 0;
@@ -360,6 +356,184 @@ export function FaceScan({ getChallenge, onScan, actionLabel, portrait = false }
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ card photo */
+
+const PHOTO_SIDE = 800;
+const PHOTO_HOLD_MS = 2100; // a 3-2-1 countdown while the voter holds still and straight
+
+/**
+ * The voter-card photo, taken on its own before the face scan: the camera waits until the
+ * face is straight on (not turned, not tipped, eyes open, alone in the picture) and held still,
+ * counts down 3-2-1, then shows the picture to keep or retake. The server checks it again.
+ */
+export function CardPhotoCapture({ onCapture }: { onCapture: (image: string) => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const rafRef = useRef(0);
+  const { t } = useI18n();
+  const [phase, setPhase] = useState<"idle" | "starting" | "live" | "review" | "error">("idle");
+  const [error, setError] = useState("");
+  const [hint, setHint] = useState("faceScan.lookAtCamera");
+  const [count, setCount] = useState<number | null>(null);
+  const [shot, setShot] = useState("");
+
+  useEffect(() => {
+    loadLandmarker().catch(() => {});
+    return () => stop();
+  }, []);
+
+  function stop() {
+    cancelAnimationFrame(rafRef.current);
+    streamRef.current?.getTracks().forEach((tr) => tr.stop());
+    streamRef.current = null;
+  }
+
+  async function start() {
+    stop();
+    setShot("");
+    setCount(null);
+    setPhase("starting");
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error(t("faceScan.browserNoCamera")), { name: "NoCamera" });
+      const [stream, landmarker] = await Promise.all([
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }),
+        loadLandmarker(),
+      ]);
+      streamRef.current = stream;
+      const video = videoRef.current!;
+      video.srcObject = stream;
+      await video.play().catch(() => {});
+      setPhase("live");
+      watch(video, landmarker);
+    } catch (err) {
+      stop();
+      const e = err as Error;
+      setError(
+        e.name === "NotAllowedError"
+          ? t("faceScan.cameraDenied")
+          : e.name === "NotFoundError"
+            ? t("faceScan.noCamera")
+            : e.name === "NotReadableError"
+              ? t("faceScan.cameraBusy")
+              : t("faceScan.startFailed")
+      );
+      setPhase("error");
+    }
+  }
+
+  function watch(video: HTMLVideoElement, landmarker: FaceLandmarker) {
+    let since = 0; // when the face became straight and still
+    let lastNose: [number, number] | null = null;
+    let lastTs = -1;
+    const tick = () => {
+      if (!streamRef.current) return;
+      const now = performance.now();
+      if (video.readyState >= 2 && video.currentTime !== lastTs) {
+        lastTs = video.currentTime;
+        const r = read(landmarker.detectForVideo(video, now), video.videoWidth, video.videoHeight);
+        const still = !!r && !!lastNose && Math.hypot(r.nose[0] - lastNose[0], r.nose[1] - lastNose[1]) < video.videoWidth * 0.01;
+        lastNose = r ? r.nose : null;
+        let why = "";
+        if (!r) why = "faceScan.lookAtCamera";
+        else if (r.others) why = "faceScan.onlyYou";
+        else if (r.width < MIN_FACE) why = "faceScan.closer";
+        else if (Math.abs(r.yaw) > PORTRAIT_YAW || r.blink > 0.3 || (r.pitchDeg !== null && Math.abs(r.pitchDeg) > PORTRAIT_PITCH_DEG))
+          why = "faceScan.lookStraight";
+        else if (!still) why = "faceScan.holdStill";
+        if (why) {
+          since = 0;
+          setCount(null);
+          setHint(why);
+        } else {
+          since ||= now;
+          const held = now - since;
+          setCount(3 - Math.floor((held / PHOTO_HOLD_MS) * 3));
+          if (held >= PHOTO_HOLD_MS) {
+            const scale = Math.min(1, PHOTO_SIDE / Math.max(video.videoWidth, video.videoHeight));
+            const c = document.createElement("canvas");
+            c.width = Math.round(video.videoWidth * scale);
+            c.height = Math.round(video.videoHeight * scale);
+            c.getContext("2d")!.drawImage(video, 0, 0, c.width, c.height);
+            setShot(c.toDataURL("image/jpeg", 0.9));
+            stop();
+            setPhase("review");
+            return;
+          }
+        }
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="relative mx-auto aspect-[4/3] w-full max-w-md overflow-hidden rounded-2xl border border-line bg-ink">
+        <video ref={videoRef} playsInline muted className={`h-full w-full -scale-x-100 object-cover ${phase === "review" ? "hidden" : ""}`} />
+        {phase === "review" && shot && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img src={shot} alt="" className="h-full w-full -scale-x-100 object-cover" />
+        )}
+        {phase === "live" && (
+          <>
+            {/* Passport frame: the head fits the oval, eyes on the line. */}
+            <div className="pointer-events-none absolute inset-0 grid place-items-center">
+              <div className={`relative aspect-[4/5] h-[86%] rounded-2xl border-4 transition-colors ${count !== null ? "border-[#8fd19e]" : "border-white/55"}`}>
+                <div className="absolute inset-x-[18%] top-[10%] bottom-[18%] rounded-[50%] border-2 border-dashed border-white/40" />
+                <div className="absolute inset-x-[12%] top-[47%] border-t border-white/30" />
+              </div>
+            </div>
+            {count !== null && count > 0 && (
+              <span className="absolute inset-0 grid place-items-center font-display text-7xl text-white drop-shadow-lg">{count}</span>
+            )}
+            <div className="absolute inset-x-4 bottom-4 text-center">
+              <span className="inline-block rounded-full bg-ink/75 px-4 py-2 text-base font-semibold text-paper shadow-lg">
+                {count !== null ? t("faceScan.photo.countdown", { n: Math.max(count, 1) }) : t(hint)}
+              </span>
+            </div>
+          </>
+        )}
+        {(phase === "idle" || phase === "starting" || phase === "error") && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/80 p-6 text-center text-paper">
+            {phase === "starting" ? (
+              <p className="flex items-center gap-2 text-sm">
+                <Loader2 className="size-4 animate-spin" aria-hidden /> {t("faceScan.opening")}
+              </p>
+            ) : (
+              <>
+                {phase === "error" && <p className="text-sm text-red-200">{error}</p>}
+                <p className="text-sm text-paper/80">{t("faceScan.photo.intro")}</p>
+                <button
+                  type="button"
+                  id="reg-card-photo"
+                  onClick={start}
+                  className="inline-flex items-center gap-2 rounded-xl bg-forest px-5 py-2.5 text-sm font-semibold text-paper hover:bg-forest-deep"
+                >
+                  {phase === "error" ? <RotateCcw className="size-4" aria-hidden /> : <Camera className="size-4" aria-hidden />}
+                  {phase === "error" ? t("common.tryAgain") : t("faceScan.photo.start")}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      {phase === "review" && (
+        <div className="space-y-3 text-center">
+          <p className="text-sm text-ink-soft">{t("faceScan.photo.review")}</p>
+          <div className="flex justify-center gap-3">
+            <button type="button" id="reg-photo-retake" className="btn-ghost" onClick={start}>
+              <RotateCcw className="size-4" aria-hidden /> {t("faceScan.photo.retake")}
+            </button>
+            <button type="button" id="reg-photo-use" className="btn-primary" onClick={() => onCapture(shot)}>
+              <Check className="size-4" aria-hidden /> {t("faceScan.photo.use")}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

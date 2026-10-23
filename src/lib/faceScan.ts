@@ -102,7 +102,9 @@ export type ScanProblem =
   | "TOO_BRIGHT"
   | "MOVE_NOT_DONE"
   | "DIFFERENT_PEOPLE"
-  | "SPOOF";
+  | "SPOOF"
+  | "PHOTO_NOT_STRAIGHT"
+  | "PHOTO_NOT_SAME";
 
 /** What the voter sees for each problem. */
 export const SCAN_MESSAGES: Record<ScanProblem, string> = {
@@ -117,6 +119,8 @@ export const SCAN_MESSAGES: Record<ScanProblem, string> = {
   MOVE_NOT_DONE: "We could not see the moves the screen asked for. Follow the prompts and try again.",
   DIFFERENT_PEOPLE: "The camera saw different people during the scan. Only the voter should be in view.",
   SPOOF: "This looks like a photo or a screen, not a live person.",
+  PHOTO_NOT_STRAIGHT: "The card photo must look straight into the camera. Retake the photo.",
+  PHOTO_NOT_SAME: "The card photo is not the same person as the face scan. Retake the photo.",
 };
 
 export type ScanResult =
@@ -287,5 +291,38 @@ export async function analyseScan(
       photo: { yaw: Math.round(best.pose.yaw * 100) / 100, pitch: Math.round(best.pose.pitch * 100) / 100 },
       ms: Math.round(performance.now() - started),
     },
+  };
+}
+
+/**
+ * The voter-card photo, taken on its own before the face scan with the voter looking straight
+ * into the camera. It must be one clear, well-lit face, straight on (same limits as above), and
+ * the same person the face scan just enrolled. Returns the passport-style crop that is printed.
+ */
+export async function analyseCardPhoto(
+  image: unknown,
+  scanEmbedding: ArrayLike<number>
+): Promise<{ ok: true; photo: string; pose: { yaw: number; pitch: number } } | { ok: false; problem: ScanProblem; detail: string }> {
+  const r = await locate("FRONT", image as string);
+  if ("ok" in r) {
+    if (r.ok) return { ok: false, problem: "BAD_FRAMES", detail: "card photo" };
+    // A clearly turned face fails the general frontal check first; say it in the card photo's words.
+    return { ok: false, problem: r.problem === "NOT_FRONTAL" ? "PHOTO_NOT_STRAIGHT" : r.problem, detail: `Card photo: ${r.detail}` };
+  }
+  const pose = headPose(r.face);
+  if (Math.abs(pose.yaw) > SCAN.PHOTO_MAX_YAW || Math.abs(pose.pitch - SCAN.PHOTO_PITCH) > SCAN.PHOTO_PITCH_TOL) {
+    return { ok: false, problem: "PHOTO_NOT_STRAIGHT", detail: `Card photo: yaw ${pose.yaw.toFixed(2)}, pitch ${pose.pitch.toFixed(2)}` };
+  }
+  const [vec] = await embedAligned([r.aligned], true);
+  const same = cosineSimilarity(vec, scanEmbedding);
+  if (same < SAME_SCAN_MIN) return { ok: false, problem: "PHOTO_NOT_SAME", detail: `Card photo only ${same.toFixed(2)} like the scan` };
+  const crop = portraitCrop(r.img, r.face);
+  const jpeg = await (await import("sharp")).default(Buffer.from(crop.data), { raw: { width: crop.width, height: crop.height, channels: 3 } })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+  return {
+    ok: true,
+    photo: `data:image/jpeg;base64,${jpeg.toString("base64")}`,
+    pose: { yaw: Math.round(pose.yaw * 100) / 100, pitch: Math.round(pose.pitch * 100) / 100 },
   };
 }
